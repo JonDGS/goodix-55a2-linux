@@ -47,6 +47,17 @@ The correlation index identifies 15 locally labeled IRP-pointer allocations. One
 
 The pointer labels are not one-to-one protocol transactions: the Windows driver reuses them. A recurring pattern is an `fdo_to_pdo` IN submission followed by a `pdo_to_fdo` response, then another submission under the same label. The final nonzero status therefore terminates the persistent IN stream—not an OUT command—and remains uninterpreted as an authentication result.
 
+## Cycle index result
+
+The stream resolves into 52 anonymous submit/complete cycles: 33 cycles on the persistent `op-001` IN stream and 19 cycles for 64-byte OUT submissions. The four large IN completions are precisely located at:
+
+- `op-001.cycle-010` (records 55–56)
+- `op-001.cycle-019` (records 83–84)
+- `op-001.cycle-021` (records 89–90)
+- `op-001.cycle-025` (records 101–102)
+
+The final nonzero completion is `op-001.cycle-033` (records 127–128). This provides a complete transport-level sequence but no wall-clock or payload evidence for assigning an individual large completion to the failed or successful scan.
+
 ## Scope preserved
 
 No driver replacement, firmware operation, enrollment, virtual-machine passthrough, custom USB transaction, or device reset is recorded for this experiment.
