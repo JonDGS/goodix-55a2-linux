@@ -35,6 +35,7 @@ Related but differently identified Goodix sensors may use substantially differen
 ## Repository layout
 
 - [`docs/`](docs/) — protocol notes, experimental records, and operating rules.
+  - [`docs/baselines/2026-08-22-fedora-linux.md`](docs/baselines/2026-08-22-fedora-linux.md) — initial stock-Linux enumeration and support baseline.
 - `tools/` — small capture, decoding, and analysis tools (to be added).
 - `wireshark/` — dissector work (to be added).
 - `fixtures/` — reviewed, sanitized fixtures only (to be added).
