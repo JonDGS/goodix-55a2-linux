@@ -41,6 +41,7 @@ Related but differently identified Goodix sensors may use substantially differen
   - [`docs/experiments/0002-windows-native-passive-capture.md`](docs/experiments/0002-windows-native-passive-capture.md) — constrained native-Windows capture plan.
   - [`docs/experiments/0002-windows-native-passive-capture-result.md`](docs/experiments/0002-windows-native-passive-capture-result.md) — private capture completed; Windows Hello preserved.
   - [`docs/PROTOCOL_LEDGER.md`](docs/PROTOCOL_LEDGER.md) — evidence-backed command-family observations and open questions.
+  - [`docs/PRIOR_WORK_COMPARISON.md`](docs/PRIOR_WORK_COMPARISON.md) — agreement and open differences with the 2021 reverse-engineering work.
   - [`docs/experiments/0003-controlled-outcome-comparison.md`](docs/experiments/0003-controlled-outcome-comparison.md) — controlled private captures for failed-versus-successful comparison.
   - [`docs/experiments/0003-controlled-outcome-comparison-result.md`](docs/experiments/0003-controlled-outcome-comparison-result.md) — payload-free outcome comparison result.
 - [`tools/pcap_metadata.py`](tools/pcap_metadata.py) — local-only classic-PCAP metadata inspector; it never emits packet payload bytes.
