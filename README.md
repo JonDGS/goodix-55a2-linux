@@ -43,6 +43,7 @@ Related but differently identified Goodix sensors may use substantially differen
 - [`tools/pcap_metadata.py`](tools/pcap_metadata.py) — local-only classic-PCAP metadata inspector; it never emits packet payload bytes.
 - [`tools/usbpcap_bulk_index.py`](tools/usbpcap_bulk_index.py) — local-only USBPcap bulk-header indexer; it skips transfer payloads entirely.
 - [`tools/usbpcap_bulk_correlation.py`](tools/usbpcap_bulk_correlation.py) — locally maps related bulk headers to anonymous operation labels; it never outputs IRP pointers or payloads.
+- [`tools/usbpcap_bulk_cycles.py`](tools/usbpcap_bulk_cycles.py) — locally pairs each bulk submission with its completion under anonymous cycle labels.
 - `wireshark/` — dissector work (to be added).
 - `fixtures/` — reviewed, sanitized fixtures only (to be added).
 

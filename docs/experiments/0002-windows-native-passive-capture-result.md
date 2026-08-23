@@ -65,4 +65,10 @@ To correlate related bulk-header records without disclosing the underlying Windo
 py .\tools\usbpcap_bulk_correlation.py "C:\path\to\win-native-hello-001.pcap"
 ```
 
-Both tools skip all transfer payload bytes. Do not share the PCAP; share only the JSON output after removing entries that are clearly unrelated to the Goodix reader.
+Both tools skip all transfer payload bytes. To pair each submission with its corresponding completion under a per-capture anonymous cycle label, run:
+
+```powershell
+py .\tools\usbpcap_bulk_cycles.py "C:\path\to\win-native-hello-001.pcap"
+```
+
+Do not share the PCAP; share only the JSON output after removing entries that are clearly unrelated to the Goodix reader.
