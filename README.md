@@ -37,6 +37,7 @@ Related but differently identified Goodix sensors may use substantially differen
 - [`docs/`](docs/) — protocol notes, experimental records, and operating rules.
   - [`docs/baselines/2026-08-22-fedora-linux.md`](docs/baselines/2026-08-22-fedora-linux.md) — initial stock-Linux enumeration and support baseline.
   - [`docs/experiments/0001-windows-reference-capture.md`](docs/experiments/0001-windows-reference-capture.md) — read-only Windows reference and capture protocol.
+  - [`docs/experiments/0001-windows-reference-result.md`](docs/experiments/0001-windows-reference-result.md) — verified working Windows driver metadata.
 - `tools/` — small capture, decoding, and analysis tools (to be added).
 - `wireshark/` — dissector work (to be added).
 - `fixtures/` — reviewed, sanitized fixtures only (to be added).
