@@ -36,6 +36,14 @@ All inspected small replies use the same clear envelope flag, `0xa0`. The succes
 
 Both captures share the early non-6-byte reply metadata at records 40, 50, and 62. The unsuccessful path adds a 5-byte declared reply at record 72 and a 28-byte declared reply at record 78, alongside additional 6-byte replies. This is consistent with the already observed branch after the shared command prefix; no reply bodies were read.
 
+## Small-reply command-family comparison
+
+The one-byte reply classification shows that both captures share the early reply sequence through record 62, including `B.0` acknowledgements, `A.7` state replies, `D.3` image-check replies, `3.1` FDT-down replies, and `3.3` FDT-mode replies.
+
+Only the unsuccessful path contains a `C.3` reply at record 72 and a `3.2` reply at record 78. These correspond in sequence to the failure-path-only outbound `C.3` and `3.2` command families. The successful path proceeds to its final state query and sleep sequence without those observed reply-family events.
+
+The labels are sourced from prior work; this establishes a repeatable message-family difference, not argument values or device-state semantics.
+
 ## Next investigation
 
 Compare only non-sensitive reply metadata for the command families that differ after the shared prefix, before considering any additional command-body or image handling.
