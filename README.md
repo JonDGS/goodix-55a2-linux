@@ -51,6 +51,7 @@ Related but differently identified Goodix sensors may use substantially differen
 - [`tools/goodix_outbound_envelopes.py`](tools/goodix_outbound_envelopes.py) — reads only four-byte outbound Goodix envelope headers; it never outputs message bodies.
 - [`tools/goodix_outbound_commands.py`](tools/goodix_outbound_commands.py) — reads one command byte and emits only split category/command fields.
 - [`tools/goodix_small_inbound_envelopes.py`](tools/goodix_small_inbound_envelopes.py) — reads only four-byte envelopes from small IN replies; it skips all reply bodies and large transfers.
+- [`tools/goodix_small_inbound_commands.py`](tools/goodix_small_inbound_commands.py) — reads one small-reply command byte and emits only split category/command fields.
 - `wireshark/` — dissector work (to be added).
 - `fixtures/` — reviewed, sanitized fixtures only (to be added).
 
