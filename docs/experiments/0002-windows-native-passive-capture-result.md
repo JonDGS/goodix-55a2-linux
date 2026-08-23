@@ -27,6 +27,20 @@ The local-only inspector reported the following safe, payload-free metadata:
 
 Reference: <https://desowin.org/usbpcap/captureformat.html>
 
+## Bulk-header index result
+
+A payload-free USBPcap header index identified one bulk-transfer stream:
+
+- USBPcap bus/device: `2/3` (Windows device address; this is not the physical Port 9 label).
+- Record range: 25–128, comprising all 104 indexed bulk records.
+- Endpoints: expected `0x01` OUT and `0x82` IN.
+- Normal status: `0x00000000` throughout the observed stream except the final `0xc0010000` IN record.
+- Repeated OUT transfer size: 64 bytes.
+- Observed IN transfer sizes include 9, 10, 32, and 14,866 bytes.
+- Three IN records declared 14,866 bytes each, totaling 44,598 bytes.
+
+The 14,866-byte IN transfers are large enough to be potentially sensitive biometric or image-adjacent device data. Their payloads remain unread and unshared. The final nonzero status is recorded as an observation only; it must not be interpreted as an authentication result without correlating request/completion metadata.
+
 ## Scope preserved
 
 No driver replacement, firmware operation, enrollment, virtual-machine passthrough, custom USB transaction, or device reset is recorded for this experiment.
