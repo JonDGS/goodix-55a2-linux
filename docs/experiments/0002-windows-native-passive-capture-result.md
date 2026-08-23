@@ -58,6 +58,12 @@ The stream resolves into 52 anonymous submit/complete cycles: 33 cycles on the p
 
 The final nonzero completion is `op-001.cycle-033` (records 127–128). This provides a complete transport-level sequence but no wall-clock or payload evidence for assigning an individual large completion to the failed or successful scan.
 
+## Relative timeline result
+
+The four large IN completions occur at relative offsets 2.099131 s, 2.829337 s, 2.873400 s, and 3.021803 s from the first indexed bulk record. Their successive gaps are 730.206 ms, 44.063 ms, and 148.403 ms; they occupy a 922.672 ms window.
+
+This timing is compatible with activity from the two recorded scan attempts, but it does not prove which completion belongs to which attempt. The final persistent IN cycle remained pending for 5.010069 s before the nonzero completion, which is consistent with capture shutdown ending an outstanding read, but remains an interpretation rather than a decoded status.
+
 ## Scope preserved
 
 No driver replacement, firmware operation, enrollment, virtual-machine passthrough, custom USB transaction, or device reset is recorded for this experiment.
