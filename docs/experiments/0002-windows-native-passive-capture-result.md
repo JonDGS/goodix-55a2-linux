@@ -37,9 +37,15 @@ A payload-free USBPcap header index identified one bulk-transfer stream:
 - Normal status: `0x00000000` throughout the observed stream except the final `0xc0010000` IN record.
 - Repeated OUT transfer size: 64 bytes.
 - Observed IN transfer sizes include 9, 10, 32, and 14,866 bytes.
-- Three IN records declared 14,866 bytes each, totaling 44,598 bytes.
+- Four IN records declared 14,866 bytes each, totaling 59,464 bytes.
 
 The 14,866-byte IN transfers are large enough to be potentially sensitive biometric or image-adjacent device data. Their payloads remain unread and unshared. The final nonzero status is recorded as an observation only; it must not be interpreted as an authentication result without correlating request/completion metadata.
+
+## Anonymous correlation result
+
+The correlation index identifies 15 locally labeled IRP-pointer allocations. One long-lived label, `op-001`, owns the repeated IN `0x82` stream, including all four 14,866-byte records and the final `0xc0010000` status. The 64-byte OUT `0x01` writes use the remaining labels.
+
+The pointer labels are not one-to-one protocol transactions: the Windows driver reuses them. A recurring pattern is an `fdo_to_pdo` IN submission followed by a `pdo_to_fdo` response, then another submission under the same label. The final nonzero status therefore terminates the persistent IN stream—not an OUT command—and remains uninterpreted as an authentication result.
 
 ## Scope preserved
 
