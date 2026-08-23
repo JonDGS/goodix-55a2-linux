@@ -107,3 +107,9 @@ For the next protocol layer, this local-only tool reads the four-byte Goodix env
 ```powershell
 py .\tools\goodix_outbound_envelopes.py "C:\path\to\win-native-hello-001.pcap"
 ```
+
+The next local-only tool reads one command byte and emits only its split category/command fields, never the raw byte or message body:
+
+```powershell
+py .\tools\goodix_outbound_commands.py "C:\path\to\win-native-hello-001.pcap"
+```
