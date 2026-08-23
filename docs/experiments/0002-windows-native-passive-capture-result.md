@@ -33,4 +33,10 @@ No driver replacement, firmware operation, enrollment, virtual-machine passthrou
 
 ## Next step
 
-Use a local-only metadata inspector to determine the capture container type and packet-level volume without displaying or exporting payload bytes. Do not share the original capture; share only the inspector's metadata output after review.
+Run the local-only bulk-header indexer against the private capture:
+
+```powershell
+py .\tools\usbpcap_bulk_index.py "C:\path\to\win-native-hello-001.pcap"
+```
+
+The tool reads USBPcap headers and skips all transfer payload bytes. Do not share the PCAP; share only its JSON output after removing entries that are clearly unrelated to the Goodix reader.
