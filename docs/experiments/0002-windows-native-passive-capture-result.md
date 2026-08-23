@@ -64,6 +64,12 @@ The four large IN completions occur at relative offsets 2.099131 s, 2.829337 s, 
 
 This timing is compatible with activity from the two recorded scan attempts, but it does not prove which completion belongs to which attempt. The final persistent IN cycle remained pending for 5.010069 s before the nonzero completion, which is consistent with capture shutdown ending an outstanding read, but remains an interpretation rather than a decoded status.
 
+## Outbound envelope result
+
+All 19 observed outbound envelopes use flags `0xa0`, consistent with the clear Goodix message-pack framing described by the upstream dissector. Declared message-length frequencies are 5 bytes (1), 6 bytes (6), 7 bytes (2), 8 bytes (1), and 26 bytes (9). Each appears inside a 64-byte USB OUT transfer, so the USB transport length is not the declared message length.
+
+For this capture, each observed checksum equals the low byte of `0xa0 + declared_length`; this is a capture-specific framing hypothesis, not yet a validated checksum rule. No command byte or message body has been read or recorded.
+
 ## Scope preserved
 
 No driver replacement, firmware operation, enrollment, virtual-machine passthrough, custom USB transaction, or device reset is recorded for this experiment.
