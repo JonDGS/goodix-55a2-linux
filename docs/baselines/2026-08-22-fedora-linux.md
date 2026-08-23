@@ -8,8 +8,10 @@ No fingerprint enrollment or capture was performed for this baseline.
 
 ## Environment observed
 
-- Distribution: Fedora Linux (exact release not yet recorded)
-- Kernel visible in the boot log: `7.1.9-200.fc44.x86_64`
+- Distribution: Fedora 44
+- Kernel: `7.1.9-200.fc44.x86_64`
+- `fprintd`: `1.94.5-5.fc44.x86_64`
+- `libfprint`: `1.94.100-1.fc44.x86_64`
 - USB path: `3-9`
 - USB speed: High Speed, 480 Mb/s
 
@@ -34,9 +36,11 @@ The device has a single vendor-specific interface with the expected pair of bulk
 ## Current Linux support boundary
 
 - `lsusb -t` shows interface 0 as `Driver=[none]`.
+- udev identifies the device as USB class `239/2/1` with interface signature `:ff0000:`; it has no hardware serial string. The generated `ID_SERIAL` value is the generic product label, not a unique device identifier.
+- The USB core enables autosuspend (`ID_AUTOSUSPEND=1`). Early protocol tools should keep this in mind when diagnosing unexplained resets or timeouts.
 - `fprintd-list "$USER"` returns `No devices available`.
 - Kernel boot logging records normal USB enumeration for `27c6:55a2`; it does not show a fingerprint-driver bind, reset loop, or transport failure.
-- `fprintd` starts on demand and deactivates roughly 30 seconds later. This is consistent with an idle service when no usable device is exposed; it is not by itself an error.
+- `fprintd.service` is a static, on-demand service and is currently inactive. Its start-then-stop cycle is consistent with an idle service when no usable device is exposed; it is not by itself an error.
 
 **Baseline conclusion:** the device is electrically present and fully enumerated by USB, but no installed Linux driver stack currently claims or exposes it to `fprintd`.
 
