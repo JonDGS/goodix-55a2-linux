@@ -4,7 +4,7 @@
 
 A private capture named `win-native-hello-001.pcap` was collected on the known-working native Windows installation, following the constrained capture plan.
 
-- Action captured: one ordinary Windows Hello fingerprint verification.
+- Action captured: Windows lock followed by two ordinary Windows Hello fingerprint verifications: the first attempt failed, and the second attempt succeeded.
 - Original capture handling: retained locally; not committed, uploaded, or shared with this repository.
 - Post-capture Windows Hello verification: **pass**.
 
