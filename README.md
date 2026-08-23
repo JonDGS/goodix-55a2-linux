@@ -39,7 +39,8 @@ Related but differently identified Goodix sensors may use substantially differen
   - [`docs/experiments/0001-windows-reference-capture.md`](docs/experiments/0001-windows-reference-capture.md) — read-only Windows reference and capture protocol.
   - [`docs/experiments/0001-windows-reference-result.md`](docs/experiments/0001-windows-reference-result.md) — verified working Windows driver metadata.
   - [`docs/experiments/0002-windows-native-passive-capture.md`](docs/experiments/0002-windows-native-passive-capture.md) — constrained native-Windows capture plan.
-- `tools/` — small capture, decoding, and analysis tools (to be added).
+  - [`docs/experiments/0002-windows-native-passive-capture-result.md`](docs/experiments/0002-windows-native-passive-capture-result.md) — private capture completed; Windows Hello preserved.
+- [`tools/pcap_metadata.py`](tools/pcap_metadata.py) — local-only classic-PCAP metadata inspector; it never emits packet payload bytes.
 - `wireshark/` — dissector work (to be added).
 - `fixtures/` — reviewed, sanitized fixtures only (to be added).
 
