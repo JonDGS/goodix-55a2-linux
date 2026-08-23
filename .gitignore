@@ -3,6 +3,7 @@ captures/
 dumps/
 biometrics/
 secrets/
+analysis-output/
 *.pcap
 *.pcapng
 *.keylog
