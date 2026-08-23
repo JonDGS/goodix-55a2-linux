@@ -45,6 +45,7 @@ Related but differently identified Goodix sensors may use substantially differen
 - [`tools/usbpcap_bulk_correlation.py`](tools/usbpcap_bulk_correlation.py) — locally maps related bulk headers to anonymous operation labels; it never outputs IRP pointers or payloads.
 - [`tools/usbpcap_bulk_cycles.py`](tools/usbpcap_bulk_cycles.py) — locally pairs each bulk submission with its completion under anonymous cycle labels.
 - [`tools/usbpcap_bulk_timeline.py`](tools/usbpcap_bulk_timeline.py) — emits relative-only cycle offsets, with no wall-clock timestamps, pointers, or payloads.
+- [`tools/goodix_outbound_envelopes.py`](tools/goodix_outbound_envelopes.py) — reads only four-byte outbound Goodix envelope headers; it never outputs message bodies.
 - `wireshark/` — dissector work (to be added).
 - `fixtures/` — reviewed, sanitized fixtures only (to be added).
 

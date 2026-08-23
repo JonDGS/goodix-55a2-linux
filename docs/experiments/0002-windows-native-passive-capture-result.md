@@ -95,3 +95,9 @@ To align cycles to the two scan attempts without disclosing wall-clock time, run
 ```powershell
 py .\tools\usbpcap_bulk_timeline.py "C:\path\to\win-native-hello-001.pcap"
 ```
+
+For the next protocol layer, this local-only tool reads the four-byte Goodix envelope header on 64-byte outbound messages and omits every message body:
+
+```powershell
+py .\tools\goodix_outbound_envelopes.py "C:\path\to\win-native-hello-001.pcap"
+```
