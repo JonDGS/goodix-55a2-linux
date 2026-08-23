@@ -113,3 +113,5 @@ The next local-only tool reads one command byte and emits only its split categor
 ```powershell
 py .\tools\goodix_outbound_commands.py "C:\path\to\win-native-hello-001.pcap"
 ```
+
+The resulting command-family evidence is maintained in [`docs/PROTOCOL_LEDGER.md`](../PROTOCOL_LEDGER.md); no payload data is included.
