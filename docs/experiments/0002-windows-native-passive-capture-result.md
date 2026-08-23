@@ -83,3 +83,9 @@ py .\tools\usbpcap_bulk_cycles.py "C:\path\to\win-native-hello-001.pcap"
 ```
 
 Do not share the PCAP; share only the JSON output after removing entries that are clearly unrelated to the Goodix reader.
+
+To align cycles to the two scan attempts without disclosing wall-clock time, run:
+
+```powershell
+py .\tools\usbpcap_bulk_timeline.py "C:\path\to\win-native-hello-001.pcap"
+```
