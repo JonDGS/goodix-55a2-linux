@@ -41,6 +41,7 @@ Related but differently identified Goodix sensors may use substantially differen
   - [`docs/experiments/0002-windows-native-passive-capture.md`](docs/experiments/0002-windows-native-passive-capture.md) — constrained native-Windows capture plan.
   - [`docs/experiments/0002-windows-native-passive-capture-result.md`](docs/experiments/0002-windows-native-passive-capture-result.md) — private capture completed; Windows Hello preserved.
   - [`docs/PROTOCOL_LEDGER.md`](docs/PROTOCOL_LEDGER.md) — evidence-backed command-family observations and open questions.
+  - [`docs/experiments/0003-controlled-outcome-comparison.md`](docs/experiments/0003-controlled-outcome-comparison.md) — controlled private captures for failed-versus-successful comparison.
 - [`tools/pcap_metadata.py`](tools/pcap_metadata.py) — local-only classic-PCAP metadata inspector; it never emits packet payload bytes.
 - [`tools/usbpcap_bulk_index.py`](tools/usbpcap_bulk_index.py) — local-only USBPcap bulk-header indexer; it skips transfer payloads entirely.
 - [`tools/usbpcap_bulk_correlation.py`](tools/usbpcap_bulk_correlation.py) — locally maps related bulk headers to anonymous operation labels; it never outputs IRP pointers or payloads.
