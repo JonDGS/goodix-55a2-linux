@@ -77,6 +77,7 @@ This is the only capture stage approved by this plan.
 8. Confirm Device Manager reports normal operation.
 9. Lock Windows and perform one ordinary Windows Hello verification after the capture has stopped.
 10. Record pass/fail and the capture duration in the private manifest.
+11. Before leaving Windows, verify the PCAP spans real elapsed time and contains records after any injected descriptor preamble. A small file containing only same-timestamp descriptors is not a lifecycle capture and should be retained as an unsuccessful attempt, not analyzed as initialization evidence.
 
 Keep the window short. USBPcap records the selected root hub, not an abstract promise to mind its own business.
 
