@@ -4,6 +4,22 @@ An open, privacy-conscious research effort to support the Goodix USB fingerprint
 
 > **Status: early research.** This is not an authentication solution and must not be relied on to protect an account or device.
 
+## Windows capture helper
+
+The [command-line capture helper](docs/WINDOWS_CAPTURE_CLI.md) locates the exact
+Goodix reader dynamically, records private scenario-based USBPcap sessions, and
+validates traffic without decoding packet bodies. **Experimental checkpoint, not
+validated Windows capture support:** on-device discovery and output readiness
+have succeeded, but orderly recorder shutdown is unresolved and post-stop
+validation was skipped. The guide records the known failure and next diagnostic
+steps. Guarded warm-restart code exists but must remain unused until an ordinary
+unlock capture passes the capture/cleanup gates.
+
+```powershell
+py -3 .\tools\goodix_capture.py discover
+py -3 .\tools\goodix_capture.py
+```
+
 ## Goals
 
 1. Document the sensor protocol with reproducible experiments.

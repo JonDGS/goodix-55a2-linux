@@ -4,6 +4,11 @@ dumps/
 biometrics/
 secrets/
 analysis-output/
+# CLI session directories also contain private local metadata manifests
+goodix-success-*/
+goodix-failure-*/
+goodix-warm-restart-*/
+goodix-activation-*/
 *.pcap
 *.pcapng
 *.keylog
