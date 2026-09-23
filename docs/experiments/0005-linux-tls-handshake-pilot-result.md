@@ -62,9 +62,13 @@ Each change was reviewed independently before the next hardware run.
    prior-work approach of writing a known key is not needed here.
 5. The reader acknowledges `D.2` after a successful handshake.
 
+## Follow-up check
+
+After the runs, the operator booted Windows and verified fingerprint unlock
+with Windows Hello. It still works.
+
 ## Not established
 
 - Image capture or decoding through the TLS session.
 - Fingerprint enrollment or matching.
-- Whether Windows Hello still works after these runs (not yet checked).
 - The derivation behind the `E.2` PSK hash; the tool does not use `E.2`.
