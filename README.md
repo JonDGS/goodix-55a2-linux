@@ -4,6 +4,22 @@ An open, privacy-conscious research effort to support the Goodix USB fingerprint
 
 > **Status: early research.** This is not an authentication solution and must not be relied on to protect an account or device.
 
+## Windows capture helper
+
+The [command-line capture helper](docs/WINDOWS_CAPTURE_CLI.md) locates the exact
+Goodix reader dynamically, records private scenario-based USBPcap sessions, and
+validates traffic without decoding packet bodies. **Experimental checkpoint, not
+validated Windows capture support:** on-device discovery and output readiness
+have succeeded, but orderly recorder shutdown is unresolved and post-stop
+validation was skipped. The guide records the known failure and next diagnostic
+steps. Guarded warm-restart code exists but must remain unused until an ordinary
+unlock capture passes the capture/cleanup gates.
+
+```powershell
+py -3 .\tools\goodix_capture.py discover
+py -3 .\tools\goodix_capture.py
+```
+
 ## Goals
 
 1. Document the sensor protocol with reproducible experiments.
@@ -44,6 +60,7 @@ Related but differently identified Goodix sensors may use substantially differen
   - [`docs/PRIOR_WORK_COMPARISON.md`](docs/PRIOR_WORK_COMPARISON.md) — agreement and open differences with the 2021 reverse-engineering work.
   - [`docs/experiments/0003-controlled-outcome-comparison.md`](docs/experiments/0003-controlled-outcome-comparison.md) — controlled private captures for failed-versus-successful comparison.
   - [`docs/experiments/0003-controlled-outcome-comparison-result.md`](docs/experiments/0003-controlled-outcome-comparison-result.md) — payload-free outcome comparison result.
+  - [`docs/experiments/0004-early-driver-initialization-capture.md`](docs/experiments/0004-early-driver-initialization-capture.md) — gated, recoverable plan to observe the installed Windows driver's warm-start initialization.
 - [`tools/pcap_metadata.py`](tools/pcap_metadata.py) — local-only classic-PCAP metadata inspector; it never emits packet payload bytes.
 - [`tools/usbpcap_bulk_index.py`](tools/usbpcap_bulk_index.py) — local-only USBPcap bulk-header indexer; it skips transfer payloads entirely.
 - [`tools/usbpcap_bulk_correlation.py`](tools/usbpcap_bulk_correlation.py) — locally maps related bulk headers to anonymous operation labels; it never outputs IRP pointers or payloads.
