@@ -4,6 +4,18 @@ An open, privacy-conscious research effort to support the Goodix USB fingerprint
 
 > **Status: early research.** This is not an authentication solution and must not be relied on to protect an account or device.
 
+## Current state
+
+- Windows Hello captures have mapped the reader's command families and transfer
+  cycles without reading message bodies ([`docs/PROTOCOL_LEDGER.md`](docs/PROTOCOL_LEDGER.md)).
+- **Linux handshake works.** A handshake-only Linux tool completed the reader's
+  TLS-PSK handshake using the key the Windows driver already provisioned, and the
+  reader acknowledged it. No key was written and no images were requested
+  ([experiment 0005](docs/experiments/0005-linux-tls-handshake-pilot-result.md)).
+  Windows Hello was checked afterwards and still works.
+- Not yet done: any command inside the TLS session, image capture, enrollment or
+  matching. There is no usable Linux driver.
+
 ## Windows capture helper
 
 The [command-line capture helper](docs/WINDOWS_CAPTURE_CLI.md) locates the exact
@@ -24,7 +36,7 @@ py -3 .\tools\goodix_capture.py
 
 1. Document the sensor protocol with reproducible experiments.
 2. Build small, auditable Linux tools for device interrogation and capture analysis.
-3. Establish a minimal, safe proof of communication with the device.
+3. Establish a minimal, safe proof of communication with the device (TLS handshake done, experiment 0005).
 4. Pursue an upstream-quality path toward `libfprint` support, if technically and security-wise appropriate.
 
 ## Non-goals
@@ -61,6 +73,9 @@ Related but differently identified Goodix sensors may use substantially differen
   - [`docs/experiments/0003-controlled-outcome-comparison.md`](docs/experiments/0003-controlled-outcome-comparison.md) — controlled private captures for failed-versus-successful comparison.
   - [`docs/experiments/0003-controlled-outcome-comparison-result.md`](docs/experiments/0003-controlled-outcome-comparison-result.md) — payload-free outcome comparison result.
   - [`docs/experiments/0004-early-driver-initialization-capture.md`](docs/experiments/0004-early-driver-initialization-capture.md) — gated, recoverable plan to observe the installed Windows driver's warm-start initialization.
+  - [`docs/experiments/0004-early-driver-initialization-result.md`](docs/experiments/0004-early-driver-initialization-result.md) — startup could not be captured; prior-work startup sequence recorded instead.
+  - [`docs/experiments/0005-linux-tls-handshake-pilot-result.md`](docs/experiments/0005-linux-tls-handshake-pilot-result.md) — Linux TLS-PSK handshake completed with the existing key.
+  - [`docs/WINDOWS_CAPTURE_CLI.md`](docs/WINDOWS_CAPTURE_CLI.md) — experimental Windows capture helper guide.
 - [`tools/pcap_metadata.py`](tools/pcap_metadata.py) — local-only classic-PCAP metadata inspector; it never emits packet payload bytes.
 - [`tools/usbpcap_bulk_index.py`](tools/usbpcap_bulk_index.py) — local-only USBPcap bulk-header indexer; it skips transfer payloads entirely.
 - [`tools/usbpcap_bulk_correlation.py`](tools/usbpcap_bulk_correlation.py) — locally maps related bulk headers to anonymous operation labels; it never outputs IRP pointers or payloads.
@@ -70,6 +85,8 @@ Related but differently identified Goodix sensors may use substantially differen
 - [`tools/goodix_outbound_commands.py`](tools/goodix_outbound_commands.py) — reads one command byte and emits only split category/command fields.
 - [`tools/goodix_small_inbound_envelopes.py`](tools/goodix_small_inbound_envelopes.py) — reads only four-byte envelopes from small IN replies; it skips all reply bodies and large transfers.
 - [`tools/goodix_small_inbound_commands.py`](tools/goodix_small_inbound_commands.py) — reads one small-reply command byte and emits only split category/command fields.
+- [`tools/goodix_capture.py`](tools/goodix_capture.py) — experimental Windows capture CLI (see the guide above).
+- [`tools/goodix_handshake.py`](tools/goodix_handshake.py) — Linux handshake-only pilot: four fixed commands, TLS-PSK server in memory, no key writes or image requests. Run only as an approved experiment.
 - `wireshark/` — dissector work (to be added).
 - `fixtures/` — reviewed, sanitized fixtures only (to be added).
 
