@@ -102,7 +102,7 @@ From Lambertz's `capture.py` for this USB ID, and the same flow in `goodix-fp-du
 2. The four large IN completions are transport-correlated with `McuGetImage` commands. Treat them as potentially biometric image data; they remain unread and private.
 3. Command names are prior-work labels, not independently proven semantics. A future proof requires a repeatable, non-sensitive experiment for each command family.
 4. No `D.0`/`D.2` appears in unlock captures, so the TLS session is established once at driver start and reused. This matches the prior-work startup flow.
-5. Startup could not be captured (experiment 0004 result). Steps 1, 2, 5 and 6 of the prior-work flow were since confirmed from Linux (experiment 0005); the `E.2`/`E.0` PSK steps remain unconfirmed.
+5. Startup could not be captured (experiment 0004 result). Steps 2, 5 and 6 of the prior-work flow were since confirmed from Linux (experiment 0005). Step 1 (`0.0` NOP) was sent but the reader did not reply. The `E.2`/`E.0` PSK steps remain unconfirmed.
 6. The Windows-provisioned PSK works from Linux without rewriting it.
 
 ## Unknowns
