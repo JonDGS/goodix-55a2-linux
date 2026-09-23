@@ -165,9 +165,18 @@ class CaptureSession:
             except Exception:
                 graceful = False
             self.report["segments"][-1]["graceful_stop"] = bool(graceful)
-            if not graceful:
+            stop = getattr(process, "stop_report", None)
+            if stop is not None:
+                # Pipe recorder: file integrity comes from whole-record writes,
+                # so only an unrequested exit or invalid stream is a gap.
+                self.report["segments"][-1]["stop"] = stop
+                if stop["stop_method"] == "exited_before_stop" or not stop["output_valid"]:
+                    self.report["capture_gap"] = True
+            elif not graceful:
                 self.report["capture_gap"] = True
-            self.event("recorder_stopped", graceful=bool(graceful))
+            self.event("recorder_stopped", graceful=bool(graceful),
+                       **({"stop_method": stop["stop_method"],
+                           "orderly_stop": stop.get("orderly_stop", False)} if stop else {}))
 
     def observe(self, reader):
         if reader.instance_id != self.identity:
@@ -191,7 +200,13 @@ class CaptureSession:
         self.stop_segment()
         live = False
         for segment in self.report["segments"]:
-            if segment["graceful_stop"] is not True:
+            stop = segment.get("stop")
+            if stop is not None:
+                if not stop["output_valid"]:
+                    segment["validation_error"] = "incomplete_or_invalid_capture"
+                    self.report["capture_gap"] = True
+                    continue
+            elif segment["graceful_stop"] is not True:
                 segment["validation_error"] = "orderly_stop_unconfirmed"
                 self.report["capture_gap"] = True
                 continue

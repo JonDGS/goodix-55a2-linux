@@ -4,38 +4,38 @@ A command-line Python helper for **Goodix `27c6:55a2`**, using the installed
 USBPcap driver. No GUI, pip packages, Wireshark UI, or fingerprint driver replacement
 is required. This is research tooling, not a fingerprint authentication driver.
 
-**Status: paused experimental checkpoint.** Portable logic and synthetic
-subprocess tests pass on Linux. The Windows pilot has confirmed exact-reader
-discovery after the empty-port fix, and output-ready metadata was visible during
-recording. Orderly recorder shutdown is unresolved: the saved session reports
-`graceful_stop: false` and `validation_error: orderly_stop_unconfirmed`, so packet
-validation was skipped. Successful fingerprint unlock was operator-reported, not
-established by capture analysis. Folder ACL effectiveness, console/process cleanup,
-full capture operation, and PnP restart are not Windows-validated.
+**Status: experimental pilot, ordinary capture validated on one machine.**
+Portable logic and synthetic subprocess tests pass on Linux. On the pilot
+laptop, version 0.2.0 recorded one ordinary successful fingerprint unlock end to
+end: exact-reader discovery (bus 2, address 3), 82 records over about 16 s, 58
+reader bulk records including one large incoming transfer, no truncation, no
+capture gap, valid output. Folder ACL effectiveness and PnP restart are not
+Windows-validated.
 
-**Do not proceed to warm restart.** Resume with the saved stopped-file inspection
-and shutdown diagnostics below, not repeated biometric recordings.
+**Do not proceed to warm restart** without the separate recovery gate and
+explicit per-run approval.
 
-## Current pilot findings and resume point
+## Current pilot findings
 
+- Recording uses a standard-output pipe (`-o -`); see
+  [Recorder transport](#recorder-transport-and-stopping). The earlier
+  console-quit approach and its diagnostics are superseded.
 - Empty-port discovery initially failed because a full USB connection response
   returned `NoDeviceConnected` with `ConnectionIndex` zero. The SDK marks this
   field INPUT. The narrow fix accepts zero only for that empty-port state; short
   responses, connected/unhealthy port mismatches, and other nonzero mismatches
-  remain rejected. Subsequent native discovery succeeded.
-- An ordinary-unlock attempt reached output-ready and displayed output bytes.
-  Its manifest recorded `operator_finish`, then `recorder_stopped` with
-  `graceful: false`. No packet summary was produced. `live_reader_traffic: false`
-  therefore means unvalidated here, not proof that reader traffic was absent.
-- The current manifest does not distinguish a helper launch/attachment/input
-  failure, unexpected recorder exit, nonzero exit code, or shutdown timeout.
-  The exact cause is unknown. Do not weaken orderly-stop requirements to make the
-  report appear successful.
-- Preserve unsuccessful captures privately. Inspect the existing stopped segment
-  locally using `inspect` and its session bus/address; a parseable file does not
-  retroactively establish continuity or a clean shutdown. Confirm
-  `goodix_console.py` is beside the other modules. Next investigate bounded,
-  privacy-safe shutdown diagnostics before another recording.
+  remain rejected.
+- The reader's USB address changes between boots (1, 2 and 3 have been
+  observed). Always use the address from a fresh `discover`, never one from an
+  earlier session.
+- **Known issue: USBPcap can stop delivering transfers until Windows restarts.**
+  In that state every capture, including Wireshark's own extcap capture,
+  contains only the injected descriptors (zero time span), although Windows
+  Hello unlocks succeed. Discovery and recorder startup look normal. A full
+  Windows restart restored capture. The trigger is unknown. Symptom check: a
+  session reporting `live_reader_traffic: false` with only descriptor records
+  after a real unlock; confirm with one Wireshark capture before debugging the
+  helper.
 - Do not publish raw captures, local manifests, personal paths, or device instance
   identifiers. No raw pilot artifacts are included in this repository.
 
@@ -122,37 +122,40 @@ or expiration of the time budget while mapping is unavailable cannot yield a
 continuous-success report. The recorder can continue briefly on its current hub
 while discovery retries, but its output is not proof of the reader's mapping.
 
-### Output readiness is metadata only
+### Output readiness
 
-USBPcapCMD opens the `-o` file with `GENERIC_WRITE`, **share mode 0**, and
-`CREATE_NEW` ([pinned source, lines 866–872](https://github.com/desowin/usbpcap/blob/477b6edcbd7e99a47f77afc0c4168a9ebee603bb/USBPcapCMD/cmd.c#L866-L872)).
-The helper therefore does not try to open/read the PCAP while recording. It calls
-[`GetFileAttributesExW`](https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-getfileattributesexw)
-for metadata and requires a reported size of at least 24 bytes **and** a running
-recorder before declaring **output-ready**. This is more than liveness alone, but
-it is not validation of those bytes as a PCAP header.
+The recorder is **output-ready** once the helper has received and validated the
+PCAP global header from the pipe while the recorder is still running. If that
+does not happen within 10 seconds, startup fails closed.
 
-Microsoft's [`CreateFileW` sharing contract](https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-createfilew#parameters)
-explicitly exempts attribute access from sharing restrictions;
-[`WIN32_FILE_ATTRIBUTE_DATA`](https://learn.microsoft.com/en-us/windows/win32/api/fileapi/ns-fileapi-win32_file_attribute_data)
-includes the high/low file-size fields. This is the documented basis for the
-metadata-only approach, not a claim of a completed Windows runtime test. Size
-visibility and update timing with the installed USBPcap and local filesystem must
-be checked in the pilot. If the minimum size is not visible within the readiness
-polling budget, startup fails closed; it never falls back to liveness-only success.
+While recording, the UI reports output bytes only, which include all hub
+traffic and descriptor injection; it is not evidence of reader activity. The
+payload-free PCAP/USBPcap validation runs at session finish for every segment
+whose stream is valid, including an idle recorder terminated after the grace
+period. A corrupt or unreadable stream marks the segment incomplete and skips
+automatic validation.
 
-While recording, the UI reports **output bytes only**, which include all hub
-traffic and descriptor injection. There are no live reader-packet counts or live
-header checks. Metadata size is not a flush/durability guarantee or evidence of
-reader activity. The full payload-free PCAP/USBPcap validation runs at session
-finish, only for segments whose recorder stopped orderly. An unconfirmed/forced
-stop marks the segment incomplete and skips automatic validation.
+### Recorder transport and stopping
 
-USBPcapCMD uses Windows console input events for `q`; writing `q` to a subprocess
-stdin pipe is insufficient. The helper owns an isolated recorder console and sends
-that console a quit event. Failure to stop cleanly forces termination and marks the
-capture as potentially incomplete. A Windows kill-on-close Job Object limits
-orphan recordings if the controller exits abnormally.
+USBPcapCMD writes the capture to its standard output (`-o -`). The helper reads
+that pipe and writes the private PCAP itself, committing only complete records,
+so a forced recorder exit cannot leave a torn record on disk. Standard input is
+the null device; no console, `AttachConsole` or injected `q` is used.
+
+To stop, the helper drains buffered records and closes its end of the pipe; the
+recorder exits on its next failed write (`stop_method: exited_after_pipe_close`).
+An **idle** recorder has nothing to write and cannot notice, so after a
+5-second grace period it is terminated (`terminated_after_grace`). The file is
+still valid. The manifest records both:
+
+- `graceful_stop` stays strict: true only for a self-exit after pipe close.
+- `orderly_stop` is true for an operator-requested stop with a valid stream,
+  including termination of an idle recorder. It is false for an unrequested
+  recorder exit or a corrupt/unreadable stream.
+
+Only an unrequested exit or an invalid stream marks a `capture_gap`. Driver-side
+drops under back-pressure are not visible in the stream. A Windows kill-on-close
+Job Object limits orphan recordings if the controller exits abnormally.
 
 ## Files and privacy
 

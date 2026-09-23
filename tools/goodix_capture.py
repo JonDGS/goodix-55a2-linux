@@ -120,6 +120,12 @@ def monitor_capture(session, backend, seconds):
     print("Capture time limit reached; stopping.")
 
 
+def default_recording_factory(executable):
+    """Stdout-pipe recorder: no console input or AttachConsole required."""
+    from goodix_pipe_capture import PipedUSBPcapRecording
+    return lambda interface, path: PipedUSBPcapRecording(executable, interface, path)
+
+
 def run_capture(backend, executable, scenario, output, seconds, *, ask=input,
                 monitor=None, recording_factory=None, secure_directory=None):
     if scenario not in SCENARIOS or not 10 <= seconds <= 120:
@@ -140,7 +146,7 @@ def run_capture(backend, executable, scenario, output, seconds, *, ask=input,
     if fresh.driver_version != reader.driver_version:
         raise RuntimeError("driver version changed during prompts; capture refused")
     reader = fresh
-    factory = recording_factory or (lambda interface, path: USBPcapRecording(executable, interface, path))
+    factory = recording_factory or default_recording_factory(executable)
     session = CaptureSession(output, scenario, factory)
     run_failure = None
     try:
