@@ -101,7 +101,7 @@ class MonitorReviewTests(unittest.TestCase):
         changes = []
         def discover():
             discoveries.append(clock.now)
-            if len(discoveries) == 4:  # initial, after prompts, before disable, after restart
+            if len(discoveries) >= 4:  # initial, after prompts, before disable; then all retries fail
                 raise RuntimeError("synthetic unavailable mapping")
             return synthetic_reader()
         backend = SimpleNamespace(discover=discover, is_enabled=lambda r: True,
@@ -120,14 +120,75 @@ class MonitorReviewTests(unittest.TestCase):
                 if "type RESTART" in prompt:
                     return "RESTART 27c6:55a2"
                 return "yes"
-            report = cli.run_capture(backend, "unused", "warm-restart", Path(d), 10,
+            report = cli.run_capture(backend, "unused", "warm-restart", Path(d), 30,  # retries use 10 s
                                      ask=ask, recording_factory=SyntheticRecording)
         self.assertEqual(changes, [False, True])
-        self.assertEqual(len(discoveries), 4)
+        self.assertEqual(len(discoveries), 3 + 20)  # bounded post-restart retries
         self.assertTrue(report["capture_gap"])
         self.assertFalse(report["continuous_capture"])
         self.assertIn("post_restart_discovery_unavailable", [e["event"] for e in report["events"]])
         self.assertIn("operator_finish", [e["event"] for e in report["events"]])
+
+    def _restart_run(self, discover):
+        clock = FakeClock()
+        keyboard = SimpleNamespace(kbhit=lambda: True, getwch=lambda: "\r")
+        changes, recordings = [], []
+        backend = SimpleNamespace(discover=discover, is_enabled=lambda r: True,
+                                  set_enabled=lambda reader, state: changes.append(state))
+        def factory(interface, path):
+            recorder = SyntheticRecording(interface, path)
+            recordings.append(recorder)
+            return recorder
+        def restart(*args, **kwargs):
+            return core.warm_restart(*args, **kwargs, pause=clock.sleep)
+        with tempfile.TemporaryDirectory() as d, \
+                patch.dict(sys.modules, {"msvcrt": keyboard}), \
+                patch.object(cli.time, "monotonic", clock.monotonic), \
+                patch.object(cli.time, "sleep", clock.sleep), \
+                patch.object(cli, "warm_restart", restart), \
+                contextlib.redirect_stdout(io.StringIO()):
+            def ask(prompt):
+                if "backup/installer:" in prompt:
+                    return d
+                if "type RESTART" in prompt:
+                    return "RESTART 27c6:55a2"
+                return "yes"
+            report = cli.run_capture(backend, "unused", "warm-restart", Path(d), 10,
+                                     ask=ask, recording_factory=factory)
+        return report, changes, recordings
+
+    def test_reenable_starts_fresh_segment_on_current_mapping(self):
+        calls = []
+        def discover():
+            calls.append(1)
+            reader = synthetic_reader()
+            if len(calls) > 3:  # re-enabled reader comes back at a new address
+                reader.address += 3
+            return reader
+        report, changes, recordings = self._restart_run(discover)
+        self.assertEqual(changes, [False, True])
+        self.assertEqual(len(report["segments"]), 2)
+        self.assertEqual(len(recordings), 2)
+        self.assertTrue(all(r.stopped for r in recordings))
+        self.assertEqual(report["planned_rotations"], 1)
+        self.assertFalse(report["capture_gap"])
+        self.assertFalse(report["continuous_capture"])  # hand-over is not continuous coverage
+        second = report["segments"][1]["targets"][0]
+        self.assertEqual(second[1], synthetic_reader().address + 3)
+        events = [e["event"] for e in report["events"]]
+        self.assertLess(events.index("reader_reenabled"), events.index("segment_rotation_requested"))
+
+    def test_reenable_rotation_retries_briefly_unavailable_discovery(self):
+        calls = []
+        def discover():
+            calls.append(1)
+            if 4 <= len(calls) <= 6:
+                raise RuntimeError("synthetic device still enumerating")
+            return synthetic_reader()
+        report, _, recordings = self._restart_run(discover)
+        self.assertEqual(len(report["segments"]), 2)
+        self.assertFalse(report["capture_gap"])
+        self.assertNotIn("post_restart_discovery_unavailable", [e["event"] for e in report["events"]])
 
     def test_live_display_is_metadata_bytes_only_not_packet_validation(self):
         clock = FakeClock()

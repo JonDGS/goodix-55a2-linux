@@ -91,7 +91,7 @@ size limit, and mapping-loss grace interval are not hard wall-clock guarantees.
 | --- | --- |
 | `success` | Start; perform one ordinary fingerprint unlock; return and press Enter. |
 | `failure` | Start; make one unsuccessful scan; use PIN/password, not another scan; finish. |
-| `warm-restart` | After safety checks and typing `RESTART 27c6:55a2`, the helper records, disables only the verified reader, waits briefly, and re-enables it. Do not touch the sensor during capture. Finish, then verify Windows Hello afterward. |
+| `warm-restart` | After safety checks and typing `RESTART 27c6:55a2`, the helper records, disables only the verified reader, waits briefly, and re-enables it. After re-enable it rediscovers the reader and starts a fresh recording segment (`segment-002.pcap`), because a recorder that was already running did not deliver the re-enabled device in testing. The hand-over is a planned rotation, so `continuous_capture` is false. Do not touch the sensor during capture. Finish, then verify Windows Hello afterward. |
 | `activation` | With the reader already enabled, record opening the Windows lock screen without touching the sensor; return using PIN and finish. This is a no-finger client-activation study, not another restart. |
 
 The program does not itself lock Windows or decide whether a fingerprint matched.
