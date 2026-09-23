@@ -3,6 +3,7 @@ import importlib.util
 import pathlib
 import sys
 import unittest
+import unittest.mock
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / 'tools'))
 
@@ -190,6 +191,110 @@ class SessionTests(unittest.TestCase):
             g.validate_tls_records(b'\x16\x03\x03\x00\x02x')
 
 
+class StateQueryTests(unittest.TestCase):
+    """Experiment 0006: one fixed A.7 after a confirmed handshake."""
+    def run_query(self, mode):
+        wire = SyntheticReader(state=mode)
+        server = g.TLSServer(bytes(range(32)))
+        report = g.handshake(wire, server, {})
+        return wire, server, report
+
+    def test_fixed_state_query_frame(self):
+        self.assertEqual(g.state_query_frame().hex(), 'a00500a5ae020055a5')
+        cmd, body = g.unpack_command(g.unpack_frame(g.state_query_frame())[1])
+        self.assertEqual((cmd, body), (0xae, b'\x55'))
+
+    def test_plaintext_reply_records_shape_only(self):
+        wire, server, report = self.run_query('plain')
+        g.query_state(wire, server, report)
+        self.assertEqual(wire.commands, [0, 0xa8, 0xd0, 0xd4, 0xae])
+        self.assertEqual(report['stage'], 'complete')
+        self.assertTrue(report['state_query_ack'])
+        self.assertEqual((report['state_reply_flag'], report['state_reply_cmd'], report['state_reply_length']), ('a0', 'ae', 16))
+        self.assertNotIn(SECRET_STATE.hex(), repr(report))
+
+    def test_tls_data_reply_decrypts_and_records_length_only(self):
+        for prefix in (9, 0):
+            wire, server, report = self.run_query(('tls', prefix))
+            g.query_state(wire, server, report)
+            self.assertTrue(report['state_reply_decrypted'])
+            self.assertEqual(report['state_reply_plaintext_length'], len(SECRET_STATE))
+            self.assertEqual(report['state_reply_flag'], 'b2')
+            self.assertNotIn(SECRET_STATE.hex(), repr(report))
+
+    def test_undecryptable_tls_reply_stops(self):
+        wire, server, report = self.run_query('garbage_tls')
+        with self.assertRaisesRegex(g.ProbeError, 'state_reply_not_decrypted'):
+            g.query_state(wire, server, report)
+        self.assertFalse(report['state_reply_decrypted'])
+
+    def test_wrong_reply_command_or_missing_ack_stops(self):
+        for mode, label in (('wrong_cmd', 'unexpected_state_reply_command'), ('no_ack', 'invalid_command_ack')):
+            wire, server, report = self.run_query(mode)
+            with self.assertRaisesRegex(g.ProbeError, label):
+                g.query_state(wire, server, report)
+            self.assertEqual(report['stage'], 'state_query')
+
+    def test_unexpected_flag_or_alert_stops(self):
+        for mode, label in (('flag_b0', 'unexpected_state_reply_flag'), ('alert', 'tls_alert_in_state_reply')):
+            wire, server, report = self.run_query(mode)
+            with self.assertRaisesRegex(g.ProbeError, label):
+                g.query_state(wire, server, report)
+
+    def test_state_query_requires_completed_handshake(self):
+        wire = SyntheticReader(state='plain')
+        with self.assertRaises(g.ProbeError):
+            g.query_state(wire, g.TLSServer(bytes(range(32))), {'stage': 'complete'})
+        self.assertEqual(wire.commands, [])
+
+    def test_usb_boundary_allows_state_query_once_and_only_when_armed(self):
+        dev, core, util = usb_fakes()
+        with g.USBWire(core, util) as wire:
+            with self.assertRaisesRegex(g.ProbeError, 'state_query_not_armed'):
+                wire.send(g.state_query_frame())
+            self.assertEqual(dev.written, [])
+            wire.arm_state_query(); wire.send(g.state_query_frame())
+            self.assertEqual(len(dev.written), 1)
+            with self.assertRaises(g.ProbeError):
+                wire.arm_state_query()
+            with self.assertRaises(g.ProbeError):
+                wire.send(g.state_query_frame())
+            for cmd in range(256):
+                if cmd not in (0, 0xa8, 0xd0, 0xd4):
+                    with self.assertRaises(g.ProbeError):
+                        wire.send(reply(cmd, b'\x55'))
+            self.assertEqual(len(dev.written), 1)
+
+    def test_usb_receive_accepts_tls_data_frames(self):
+        dev, core, util = usb_fakes()
+        with g.USBWire(core, util) as wire:
+            raw = g.frame(0xb0, b'x')
+            raw = bytes([0xb2]) + raw[1:3] + bytes([sum(bytes([0xb2]) + raw[1:3]) & 255]) + raw[4:]
+            dev.reads = [raw]
+            self.assertEqual(wire.receive(), raw)
+
+    def test_default_run_never_queries_state(self):
+        from unittest.mock import patch
+        import contextlib, io, json
+        for argv, expected in ((['--run'], 0), (['--run', '--query-state'], 1)):
+            calls = []
+            output = io.StringIO()
+            wire = unittest.mock.MagicMock()
+            wire.__enter__.return_value = wire; wire.cleanup_confirmed = True
+            def fake_handshake(w, s, r): r['stage'] = 'complete'; return r
+            with patch('sys.stdin.isatty', return_value=True), patch('os.geteuid', return_value=0), \
+                 patch.object(g, 'load_key', return_value=bytes(32)), patch.object(g, 'USBWire', return_value=wire), \
+                 patch.object(g, 'handshake', side_effect=fake_handshake), \
+                 patch.object(g, 'query_state', side_effect=lambda *a: calls.append(1)), \
+                 patch('resource.setrlimit'), contextlib.redirect_stdout(output):
+                g.main(argv)
+            self.assertEqual(len(calls), expected)
+            self.assertNotIn('error', json.loads(output.getvalue()))
+
+
+SECRET_STATE = bytes.fromhex('5a' * 13 + 'c3')
+
+
 def reply(cmd, payload):
     import struct
     body = struct.pack('<BH', cmd, len(payload)+1)+payload
@@ -198,8 +303,9 @@ def reply(cmd, payload):
 
 class SyntheticReader:
     """Real OpenSSL client behind a synthetic Goodix packet boundary."""
-    def __init__(self, bad=None):
+    def __init__(self, bad=None, state=None):
         import ssl
+        self.state = state
         self.bad = bad; self.commands = []; self.queue = []; self.client_done = False
         ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
         ctx.check_hostname = False; ctx.verify_mode = ssl.CERT_NONE
@@ -233,6 +339,32 @@ class SyntheticReader:
             self.queue.append(reply(cmd, fw))
         elif cmd == 0xd0:
             self.advance()
+        elif cmd == 0xae:
+            self.state_reply()
+
+    def arm_state_query(self):
+        pass
+
+    def state_reply(self):
+        import struct
+        mode = self.state
+        if mode == 'no_ack':
+            self.queue[-1] = reply(0xb0, b'\xae\x00'); return
+        if mode in ('plain', 'wrong_cmd'):
+            self.queue.append(reply(0xa0 if mode == 'wrong_cmd' else 0xae, SECRET_STATE + b'\0\0'))
+            return
+        if mode == 'flag_b0':
+            self.queue.append(g.frame(0xb0, b'\x16\x03\x03\x00\x01x')); return
+        if mode == 'alert':
+            body = b'\0' * 9 + b'\x15\x03\x03\x00\x02\x02\x28'
+        elif mode == 'garbage_tls':
+            body = b'\x17\x03\x03\x00\x20' + b'\x01' * 32
+        else:
+            prefix = mode[1]
+            self.client.write(SECRET_STATE)
+            body = b'\0' * prefix + self.outgoing.read()
+        head = struct.pack('<BH', 0xb2, len(body))
+        self.queue.append(head + bytes([sum(head) & 255]) + body)
 
     def receive(self):
         if not self.queue:

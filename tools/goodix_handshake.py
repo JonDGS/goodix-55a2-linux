@@ -4,12 +4,16 @@
 Protocol references (independent implementation; no upstream code executed):
   tlambertz/goodix-fingerprint-reversing@0479ce9 capture.py (MIT)
   goodix-fp-linux-dev/goodix-fp-dump@cc43bb3 goodix.py (MIT)
-Commands allowed: fixed NOP, firmware query, D0 TLS request, D4 confirmation.
-No images, TLS application data, key reads/writes, firmware or reset commands.
+Commands allowed: fixed NOP, firmware query, D0 TLS request, D4 confirmation,
+and (only with --query-state, once, after D4) a fixed A7 QueryMcuState(0x55).
+No images, outbound TLS application data, key reads/writes, firmware or reset
+commands. State-query replies are summarised by flag, command and length only.
 """
 import struct
 
 MAX_FRAME = 16384
+STATE_QUERY = 0xae
+TLS_DATA = 0xb2
 
 class ProbeError(Exception):
     """Messages are fixed diagnostic labels, never device/SSL contents."""
@@ -31,8 +35,14 @@ def command_frame(cmd):
     return frame(0xa0, body)
 
 
-def unpack_frame(raw):
-    if len(raw) < 4 or raw[0] not in (0xa0, 0xb0) or raw[3] != sum(raw[:3]) & 255:
+def state_query_frame():
+    """The single fixed A.7 QueryMcuState(0x55) frame (experiment 0006)."""
+    body = struct.pack('<BH', STATE_QUERY, 2) + b'\x55'
+    return frame(0xa0, body + bytes([(0xaa-sum(body)) & 255]))
+
+
+def unpack_frame(raw, flags=(0xa0, 0xb0)):
+    if len(raw) < 4 or raw[0] not in flags or raw[3] != sum(raw[:3]) & 255:
         raise ProbeError('invalid_frame_header')
     size = struct.unpack_from('<H', raw, 1)[0]
     if not 1 <= size <= MAX_FRAME or len(raw) != size+4:
@@ -95,6 +105,27 @@ class TLSServer:
         except ssl.SSLError as exc:
             raise ProbeError('tls_handshake_rejected:' + tls_reason(exc)) from None
         return self.outgoing.read()
+
+    def decrypt_length(self, payload):
+        """Length of inbound TLS application data; plaintext is discarded.
+
+        Prior work strips a 9-byte prefix from 0xb2 bodies; try both offsets.
+        Only the first record-shaped offset is fed to OpenSSL: a failure there
+        stops the run rather than trying again. A TLS alert raises a fixed label.
+        """
+        import ssl
+        for skip in (9, 0):
+            record = payload[skip:]
+            if len(record) >= 5 and record[0] == 21 and record[1:3] == b'\x03\x03':
+                raise ProbeError('tls_alert_in_state_reply')
+            if len(record) < 5 or record[0] != 23 or record[1:3] != b'\x03\x03':
+                continue
+            self.incoming.write(record)
+            try:
+                return len(self.connection.read(MAX_FRAME))
+            except ssl.SSLError:
+                return None
+        return None
 
 
 def tls_reason(exc):
@@ -213,6 +244,37 @@ def handshake(wire, server, report):
     raise ProbeError('handshake_frame_limit')
 
 
+def query_state(wire, server, report):
+    """Send A.7 once after a confirmed handshake; record reply shape only."""
+    if report.get('stage') != 'complete' or not server.complete:
+        raise ProbeError('state_query_before_handshake')
+    report.update(stage='state_query', state_query_ack=False)
+    wire.arm_state_query()
+    wire.send(state_query_frame())
+    expect_ack(wire, STATE_QUERY)
+    report['state_query_ack'] = True
+    flag, payload = unpack_frame(wire.receive(), (0xa0, 0xb0, TLS_DATA))
+    report.update(state_reply_flag='%02x' % flag, state_reply_length=len(payload))
+    if flag == 0xa0:
+        cmd, body = unpack_command(payload)
+        report.update(state_reply_cmd='%02x' % cmd, state_reply_length=len(body))
+        del body
+        if cmd != STATE_QUERY:
+            raise ProbeError('unexpected_state_reply_command')
+    elif flag == TLS_DATA:
+        report['state_reply_decrypted'] = False
+        size = server.decrypt_length(payload)
+        report.update(state_reply_decrypted=size is not None)
+        if size is None:
+            raise ProbeError('state_reply_not_decrypted')
+        report['state_reply_plaintext_length'] = size
+    else:
+        raise ProbeError('unexpected_state_reply_flag')
+    del payload
+    report['stage'] = 'complete'
+    return report
+
+
 def load_key(directory='/root/goodix-psk'):
     import os, stat
     directory_fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
@@ -243,6 +305,13 @@ class USBWire:
         self.devices = []; self.claimed = False; self.buffer = b''
         self.transfers = 0; self.sent = 0; self.cleanup_confirmed = False
         self.last_op = None
+        self.state_query_armed = False
+        self.state_query_sent = False
+
+    def arm_state_query(self):
+        if self.state_query_sent:
+            raise ProbeError('state_query_already_sent')
+        self.state_query_armed = True
 
     def __enter__(self):
         import time
@@ -289,7 +358,12 @@ class USBWire:
     def send(self, raw):
         flag, payload = unpack_frame(raw)
         if flag == 0xa0:
-            if raw != command_frame(payload[0]):
+            if raw == state_query_frame():
+                if not self.state_query_armed or self.state_query_sent:
+                    raise ProbeError('state_query_not_armed')
+                self.state_query_armed = False
+                self.state_query_sent = True
+            elif raw != command_frame(payload[0]):
                 raise ProbeError('non_allowlisted_command_payload')
         else:
             validate_tls_records(payload)
@@ -308,13 +382,13 @@ class USBWire:
             if len(self.buffer) >= 4:
                 head = self.buffer[:4]
                 size = struct.unpack_from('<H', head, 1)[0]
-                if head[0] not in (0xa0, 0xb0) or head[3] != sum(head[:3]) & 255 or not 1 <= size <= MAX_FRAME:
+                if head[0] not in (0xa0, 0xb0, TLS_DATA) or head[3] != sum(head[:3]) & 255 or not 1 <= size <= MAX_FRAME:
                     raise ProbeError('invalid_usb_frame_header')
                 if len(self.buffer) >= size+4:
                     raw, self.buffer = self.buffer[:size+4], self.buffer[size+4:]
                     if self.buffer and not any(self.buffer):
                         self.buffer = b''  # optional zero padding at USB transfer end
-                    unpack_frame(raw)
+                    unpack_frame(raw, (0xa0, 0xb0, TLS_DATA))
                     return raw
             self.last_op = 'read'
             chunk = bytes(self.dev.read(0x82, 65536, timeout=self.timeout()))
@@ -338,6 +412,7 @@ def main(argv=None):
     import argparse, json, os, resource, sys
     parser = argparse.ArgumentParser(description='One handshake-only probe; does not scan or provision the reader.')
     parser.add_argument('--run', action='store_true', help='perform the approved single hardware test from an interactive root terminal')
+    parser.add_argument('--query-state', action='store_true', help='experiment 0006: after the handshake, send one fixed A.7 QueryMcuState')
     args = parser.parse_args(argv)
     report = dict(stage='preflight', tls_verified=False, device_confirmation_ack=False, usb_released=False)
     wire = report_server = None
@@ -359,6 +434,8 @@ def main(argv=None):
         wire = USBWire()
         with wire:
             handshake(wire, server, report)
+            if args.query_state:
+                query_state(wire, server, report)
         report['usb_released'] = True
     except ProbeError as exc:
         report['error'] = str(exc)  # ProbeError text is fixed labels only
