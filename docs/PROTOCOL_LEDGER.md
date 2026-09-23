@@ -35,15 +35,15 @@ Names come from prior work. "Seen" means the command byte appears in this projec
 | `0xa2` | `A.1` | Reset | no |
 | `0xa4` | `A.2` | McuEraseApp | no |
 | `0xa6` | `A.3` | ReadOtp | no |
-| `0xa8` | `A.4` | FirmwareVersion | no |
+| `0xa8` | `A.4` | FirmwareVersion | yes (Linux pilot) |
 | `0xac` | `A.6` | SetPovConfig | no |
 | `0xae` | `A.7` | QueryMcuState | yes (unlock) |
 | `0xb0` | `B.0` | Ack | reply |
 | `0xc4` | `C.2` | SetDrvState | yes (shutdown) |
 | `0xc6` | `C.3` | McuSetLedState (dissector) | yes (failed unlock) |
-| `0xd0` | `D.0` | RequestTlsConnection | **no** |
+| `0xd0` | `D.0` | RequestTlsConnection | yes (Linux pilot) |
 | `0xd2` | `D.1` | McuGetPovImage | no |
-| `0xd4` | `D.2` | TlsSuccessfullyEstablished | **no** |
+| `0xd4` | `D.2` | TlsSuccessfullyEstablished | yes (Linux pilot) |
 | `0xd6` | `D.3` | PovImageCheck | yes (unlock, shutdown) |
 | `0xe0` | `E.0` | PresetPskWriteR | no |
 | `0xe4` | `E.2` | PresetPskReadR | no |
@@ -69,6 +69,21 @@ Names come from prior work. "Seen" means the command byte appears in this projec
 
 Seen identically in three captures (experiments 0004 and `goodix-reenable-001`): `0.0` → `D.3` → `C.2`, each followed by a 10-byte reply (plus one 9-byte reply after `D.3`), then a canceled IN (`0xc0010000`). The whole burst takes about 4 ms and arrives several seconds after the disable request.
 
+### TLS handshake from Linux (experiment 0005)
+
+Sent by our own tool, not the Windows driver:
+
+1. `0.0` NOP — the reader sends no reply.
+2. `A.4` FirmwareVersion — ACK, then `GF3206_RTSEC_APP_10063`.
+3. `D.0` RequestTlsConnection — ACK, then a TLS 1.2 ClientHello offering only
+   `TLS_PSK_WITH_AES_128_CBC_SHA256` (`0x00AE`) and the renegotiation SCSV.
+4. TLS-PSK handshake in `0xb0` frames, host as server, using the key the
+   Windows driver provisioned. Handshake verified.
+5. `D.2` TlsSuccessfullyEstablished — acknowledged.
+
+`E.2`/`E.0` were not used. See
+`experiments/0005-linux-tls-handshake-pilot-result.md`.
+
 ### Driver startup (prior work, not observed here)
 
 From Lambertz's `capture.py` for this USB ID, and the same flow in `goodix-fp-dump` for `55a4`/`55b4`:
@@ -87,7 +102,8 @@ From Lambertz's `capture.py` for this USB ID, and the same flow in `goodix-fp-du
 2. The four large IN completions are transport-correlated with `McuGetImage` commands. Treat them as potentially biometric image data; they remain unread and private.
 3. Command names are prior-work labels, not independently proven semantics. A future proof requires a repeatable, non-sensitive experiment for each command family.
 4. No `D.0`/`D.2` appears in unlock captures, so the TLS session is established once at driver start and reused. This matches the prior-work startup flow.
-5. Startup could not be captured (experiment 0004 result), so the startup flow above is unconfirmed on this device.
+5. Startup could not be captured (experiment 0004 result). Steps 1, 2, 5 and 6 of the prior-work flow were since confirmed from Linux (experiment 0005); the `E.2`/`E.0` PSK steps remain unconfirmed.
+6. The Windows-provisioned PSK works from Linux without rewriting it.
 
 ## Unknowns
 
@@ -95,4 +111,6 @@ From Lambertz's `capture.py` for this USB ID, and the same flow in `goodix-fp-du
 - Device state transitions that distinguish the failed scan from the successful scan.
 - Whether the 14,866-byte data is raw, compressed, encrypted, or otherwise encoded image material. Prior work reads images through TLS, which suggests encrypted transport.
 - Authentication/matching location and template handling.
-- How the Windows driver provisions and stores the device's pre-shared key, and whether Windows can recover if the key on the sensor changes.
+- Whether Windows can recover if the key on the sensor changes (not needed now: Linux can reuse the existing key).
+- The derivation behind the `E.2` PSK hash value.
+- Image transfer and decoding inside the TLS session.
