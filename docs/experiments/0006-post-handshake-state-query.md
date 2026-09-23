@@ -1,6 +1,7 @@
 # Experiment 0006: one read-only command after the TLS handshake
 
-Status: **approved plan; tool ready, not yet run on hardware.**
+Status: **run; passed.** See
+[`0006-post-handshake-state-query-result.md`](0006-post-handshake-state-query-result.md).
 
 ## Question
 

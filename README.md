@@ -13,7 +13,11 @@ An open, privacy-conscious research effort to support the Goodix USB fingerprint
   reader acknowledged it. No key was written and no images were requested
   ([experiment 0005](docs/experiments/0005-linux-tls-handshake-pilot-result.md)).
   Windows Hello was checked afterwards and still works.
-- Not yet done: any command inside the TLS session, image capture, enrollment or
+- **A command after the handshake works.** The reader answered one read-only
+  `A.7` state query in plaintext while the TLS session was open
+  ([experiment 0006](docs/experiments/0006-post-handshake-state-query-result.md)).
+  Windows Hello still works afterwards.
+- Not yet done: TLS-protected data from the reader, image capture, enrollment or
   matching. There is no usable Linux driver.
 
 ## Windows capture helper
@@ -76,6 +80,7 @@ Related but differently identified Goodix sensors may use substantially differen
   - [`docs/experiments/0004-early-driver-initialization-result.md`](docs/experiments/0004-early-driver-initialization-result.md) — startup could not be captured; prior-work startup sequence recorded instead.
   - [`docs/experiments/0005-linux-tls-handshake-pilot-result.md`](docs/experiments/0005-linux-tls-handshake-pilot-result.md) — Linux TLS-PSK handshake completed with the existing key.
   - [`docs/experiments/0006-post-handshake-state-query.md`](docs/experiments/0006-post-handshake-state-query.md) — plan: one read-only `A.7` state query after the handshake.
+  - [`docs/experiments/0006-post-handshake-state-query-result.md`](docs/experiments/0006-post-handshake-state-query-result.md) — reader answered `A.7` in plaintext after the handshake.
   - [`docs/WINDOWS_CAPTURE_CLI.md`](docs/WINDOWS_CAPTURE_CLI.md) — experimental Windows capture helper guide.
 - [`tools/pcap_metadata.py`](tools/pcap_metadata.py) — local-only classic-PCAP metadata inspector; it never emits packet payload bytes.
 - [`tools/usbpcap_bulk_index.py`](tools/usbpcap_bulk_index.py) — local-only USBPcap bulk-header indexer; it skips transfer payloads entirely.
