@@ -75,6 +75,7 @@ Related but differently identified Goodix sensors may use substantially differen
   - [`docs/experiments/0004-early-driver-initialization-capture.md`](docs/experiments/0004-early-driver-initialization-capture.md) — gated, recoverable plan to observe the installed Windows driver's warm-start initialization.
   - [`docs/experiments/0004-early-driver-initialization-result.md`](docs/experiments/0004-early-driver-initialization-result.md) — startup could not be captured; prior-work startup sequence recorded instead.
   - [`docs/experiments/0005-linux-tls-handshake-pilot-result.md`](docs/experiments/0005-linux-tls-handshake-pilot-result.md) — Linux TLS-PSK handshake completed with the existing key.
+  - [`docs/experiments/0006-post-handshake-state-query.md`](docs/experiments/0006-post-handshake-state-query.md) — plan: one read-only `A.7` state query after the handshake.
   - [`docs/WINDOWS_CAPTURE_CLI.md`](docs/WINDOWS_CAPTURE_CLI.md) — experimental Windows capture helper guide.
 - [`tools/pcap_metadata.py`](tools/pcap_metadata.py) — local-only classic-PCAP metadata inspector; it never emits packet payload bytes.
 - [`tools/usbpcap_bulk_index.py`](tools/usbpcap_bulk_index.py) — local-only USBPcap bulk-header indexer; it skips transfer payloads entirely.
