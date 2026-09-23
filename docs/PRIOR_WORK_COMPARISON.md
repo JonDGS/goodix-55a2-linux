@@ -22,6 +22,9 @@ The blog reports scan-time large packets of 14,930 bytes. Our USBPcap metadata r
 
 Prior work found TLS-PSK over USB after initialization. Our passive Windows captures began after the installed driver was already functioning and deliberately exclude large-transfer contents. Observing clear `0xa0` control envelopes in this later workflow does not prove that TLS is absent, bypassed, or unnecessary. It only establishes that these control messages were visible in clear framing at this stage.
 
+
+Experiment 0004 adds a consistent negative: no `D.0` (RequestTlsConnection) or `D.2` (TlsSuccessfullyEstablished) appears in any unlock capture, so the TLS session is set up once at driver start and reused, as the prior-work startup flow predicts. Startup itself could not be captured (see `experiments/0004-early-driver-initialization-result.md`).
+
 ## New evidence from the controlled comparison
 
 The prior work demonstrates image streaming after PSK control; it does not provide this project's controlled one-failure versus one-success comparison. Here, both outcomes share an initial setup sequence. The unsuccessful capture then requests three image-associated transfers and contains an additional `C.3`/`3.2` command-and-reply branch, whereas the successful capture requests one image-associated transfer and proceeds to state query and sleep.
