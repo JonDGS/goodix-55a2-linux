@@ -157,12 +157,23 @@ def run_capture(backend, executable, scenario, output, seconds, *, ask=input,
         if scenario == "warm-restart":
             session.report["recovery_checks_confirmed"] = approved
             warm_restart(backend, reader, approved=approved, emit=session.event)
-            # Capture remains active across the restart. Re-resolve immediately.
-            try:
-                session.observe(backend.discover())
-            except RuntimeError:
+            # The first segment stays active across the restart (it holds the shutdown burst).
+            # USBPcap may not deliver a re-enabled device to a recorder that was
+            # already running, so start a fresh segment once it is rediscovered.
+            fresh = None
+            for _ in range(20):
+                try:
+                    fresh = backend.discover()
+                    break
+                except RuntimeError:
+                    time.sleep(0.5)
+            if fresh is None:
                 session.report["capture_gap"] = True
                 session.event("post_restart_discovery_unavailable")
+            else:
+                session.rotate(fresh, "after_reenable")
+                print(f"Fresh recording segment after re-enable: {fresh.interface}, "
+                      f"bus {fresh.bus}, address {fresh.address}.")
         (monitor or monitor_capture)(session, backend, seconds)
     except BaseException as exc:
         run_failure = exc

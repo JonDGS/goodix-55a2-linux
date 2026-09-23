@@ -196,6 +196,19 @@ class CaptureSession:
             segment["targets"].append(target)
             self.event("reader_address_changed", bus=reader.bus, address=reader.address)
 
+    def rotate(self, reader, reason: str):
+        """Planned restart of the recorder into a new segment on the reader's
+        current interface. USBPcap may stop delivering a device that was
+        disabled and re-enabled, so a fresh recorder is started after re-enable.
+        The short hand-over is reported as a planned rotation, not a detected gap.
+        """
+        if reader.instance_id != self.identity:
+            raise RuntimeError("reader identity changed; stop and inspect device state")
+        self.event("segment_rotation_requested", reason=reason)
+        self.stop_segment()
+        self.report["planned_rotations"] = self.report.get("planned_rotations", 0) + 1
+        self.start(reader)
+
     def finish(self):
         self.stop_segment()
         live = False
@@ -222,7 +235,8 @@ class CaptureSession:
                 self.report["capture_gap"] = True
         self.report["state"] = "finished"
         self.report["live_reader_traffic"] = live
-        self.report["continuous_capture"] = bool(self.report["segments"]) and not self.report["capture_gap"]
+        self.report["continuous_capture"] = (bool(self.report["segments"]) and not self.report["capture_gap"]
+                                             and not self.report.get("planned_rotations"))
         self.event("session_finished")
         return self.report
 
