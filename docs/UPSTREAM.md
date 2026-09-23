@@ -11,6 +11,18 @@ This project begins as a clean repository so it can apply stricter artifact-revi
 
 The reference repository is MIT-licensed. It contains scripts, logs, captures, patches, and a Wireshark dissector for the same USB ID, `27c6:55a2`.
 
+## Later prior work
+
+- `goodix-fp-linux-dev/goodix-fp-dump` (MIT, last reviewed at commit `cc43bb3`):
+  <https://github.com/goodix-fp-linux-dev/goodix-fp-dump>. Python tooling for
+  several Goodix sensors, including the related `55a4`/`55b4`. It does not
+  list `55a2`. Its `goodix.py` command constants fill in the command map in
+  `PROTOCOL_LEDGER.md`.
+- `goodix-fp-linux-dev/libfprint`, branch `goodixtls` (LGPL-2.1): a libfprint
+  driver for other TLS-based Goodix sensors. It does not support `55a2`.
+
+The Lambertz repository was last reviewed at commit `0479ce9`.
+
 ## Reuse policy
 
 When code or documentation is copied or adapted from the reference repository:
