@@ -360,10 +360,11 @@ class NativeActionTests(unittest.TestCase):
             self.assertEqual(kwargs['env']['GOODIX_INSTANCE_ID'], INSTANCE)
             self.assertEqual(kwargs['env']['GOODIX_DRIVER_KEY'], KEY)
             self.assertEqual(kwargs['env']['GOODIX_ENABLE'], '1' if enabled else '0')
-            self.assertIn('-PassThru', argv[-1])
+            self.assertNotIn('-PassThru', argv[-1])
             self.assertIn('-InputObject', argv[-1])
             self.assertNotIn('-InstanceId', argv[-1])
-            self.assertIn('$rc[0] -ne 0', argv[-1])
+            self.assertNotIn('$rc', argv[-1])
+            self.assertIn('PnP state verification timed out', argv[-1])
             self.assertIn('-ieq $env:GOODIX_INSTANCE_ID', argv[-1])
         for bad in [INSTANCE + '*', INSTANCE + "';exit;#", r'USB\VID_27C6&PID_55A3\SYNTHETIC']:
             with self.assertRaises(RuntimeError):

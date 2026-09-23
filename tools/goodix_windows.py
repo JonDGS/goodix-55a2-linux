@@ -326,14 +326,16 @@ $d = VerifiedDevice
 $problem = Property $d 'DEVPKEY_Device_ProblemCode'
 if ($env:GOODIX_ENABLE -eq '1') {
     if ($problem -ne 22) { throw 'Reader not disabled' }
-    $rc = @(Enable-PnpDevice -InputObject $d -Confirm:$false -PassThru -ErrorAction Stop)
+    Enable-PnpDevice -InputObject $d -Confirm:$false -ErrorAction Stop | Out-Null
     $expected = 0
 } elseif ($env:GOODIX_ENABLE -eq '0') {
     if ($problem -ne 0 -or $d.Status -ne 'OK') { throw 'Reader not healthy' }
-    $rc = @(Disable-PnpDevice -InputObject $d -Confirm:$false -PassThru -ErrorAction Stop)
+    Disable-PnpDevice -InputObject $d -Confirm:$false -ErrorAction Stop | Out-Null
     $expected = 22
 } else { throw 'Invalid action' }
-if ($rc.Count -ne 1 -or $rc[0] -ne 0) { throw 'PnP operation failed' }
+# The pass-through output is a Win32_PnPEntity object, not a status code; comparing it
+# to 0 always threw after the action succeeded. Cmdlet errors stop the script
+# (ErrorActionPreference); success is proven by the state poll below.
 $verified = $false
 for ($i = 0; $i -lt 40; $i++) {
     $d = VerifiedDevice
