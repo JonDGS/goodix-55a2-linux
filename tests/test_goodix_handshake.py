@@ -241,6 +241,23 @@ class StateQueryTests(unittest.TestCase):
             with self.assertRaisesRegex(g.ProbeError, label):
                 g.query_state(wire, server, report)
 
+    def test_two_byte_plain_reply_is_decoded(self):
+        wire = SyntheticReader(state='plain2')
+        server = g.TLSServer(bytes(range(32)))
+        report = g.handshake(wire, server, {})
+        g.query_state(wire, server, report)
+        self.assertEqual(report['state_reply_length'], 2)
+        self.assertEqual(report['state_reply_hex'], '0702')
+        self.assertEqual(report['state_flags_byte0'], dict(image_valid=True, tls_connected=True, spi_send=True, locked=False))
+        self.assertEqual(report['state_flags_byte1'], dict(image_valid=False, tls_connected=True, spi_send=False, locked=False))
+        self.assertEqual(report['state_unknown_bits_byte0'], '00')
+
+    def test_decode_state_rejects_other_lengths(self):
+        for body in (b'', b'\x01', b'\x01\x02\x03'):
+            with self.assertRaisesRegex(g.ProbeError, 'state_decode_length'):
+                g.decode_state(body)
+        self.assertEqual(g.decode_state(b'\xf2\x00')['state_unknown_bits_byte0'], 'f0')
+
     def test_state_query_requires_completed_handshake(self):
         wire = SyntheticReader(state='plain')
         with self.assertRaises(g.ProbeError):
@@ -350,6 +367,8 @@ class SyntheticReader:
         mode = self.state
         if mode == 'no_ack':
             self.queue[-1] = reply(0xb0, b'\xae\x00'); return
+        if mode == 'plain2':
+            self.queue.append(reply(0xae, b'\x07\x02')); return
         if mode in ('plain', 'wrong_cmd'):
             self.queue.append(reply(0xa0 if mode == 'wrong_cmd' else 0xae, SECRET_STATE + b'\0\0'))
             return

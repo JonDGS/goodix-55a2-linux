@@ -7,7 +7,8 @@ Protocol references (independent implementation; no upstream code executed):
 Commands allowed: fixed NOP, firmware query, D0 TLS request, D4 confirmation,
 and (only with --query-state, once, after D4) a fixed A7 QueryMcuState(0x55).
 No images, outbound TLS application data, key reads/writes, firmware or reset
-commands. State-query replies are summarised by flag, command and length only.
+commands. State-query replies are summarised by flag, command and length; a 2-byte
+plaintext reply is also printed and decoded as MCU state flags (experiment 0007).
 """
 import struct
 
@@ -244,6 +245,25 @@ def handshake(wire, server, report):
     raise ProbeError('handshake_frame_limit')
 
 
+STATE_BITS = (('image_valid', 0x01), ('tls_connected', 0x02), ('spi_send', 0x04), ('locked', 0x08))
+
+
+def decode_state(body):
+    """Experiment 0007: decode a 2-byte plaintext A.7 reply (MCU state flags only).
+
+    Two published layouts disagree: Lambertz's 55a2 dissector reads the flags
+    from byte 0, goodix-fp-dump's from byte 1. Both readings are reported.
+    Only called for exactly 2 bytes; any other length stays shape-only.
+    """
+    if len(body) != 2:
+        raise ProbeError('state_decode_length')
+    out = {'state_reply_hex': body.hex()}
+    for index in (0, 1):
+        out['state_flags_byte%d' % index] = {name: bool(body[index] & bit) for name, bit in STATE_BITS}
+        out['state_unknown_bits_byte%d' % index] = '%02x' % (body[index] & 0xf0)
+    return out
+
+
 def query_state(wire, server, report):
     """Send A.7 once after a confirmed handshake; record reply shape only."""
     if report.get('stage') != 'complete' or not server.complete:
@@ -258,9 +278,11 @@ def query_state(wire, server, report):
     if flag == 0xa0:
         cmd, body = unpack_command(payload)
         report.update(state_reply_cmd='%02x' % cmd, state_reply_length=len(body))
-        del body
         if cmd != STATE_QUERY:
             raise ProbeError('unexpected_state_reply_command')
+        if len(body) == 2:
+            report.update(decode_state(body))
+        del body
     elif flag == TLS_DATA:
         report['state_reply_decrypted'] = False
         size = server.decrypt_length(payload)
