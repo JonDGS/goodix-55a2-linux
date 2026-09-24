@@ -1,6 +1,7 @@
 # Experiment 0007 plan: decode the 2-byte A.7 state reply
 
-Status: planned.
+Status: **run; inconclusive.** See
+[`0007-decode-state-bytes-result.md`](0007-decode-state-bytes-result.md).
 
 ## Why
 
