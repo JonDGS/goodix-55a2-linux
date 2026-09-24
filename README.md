@@ -17,6 +17,11 @@ An open, privacy-conscious research effort to support the Goodix USB fingerprint
   `A.7` state query in plaintext while the TLS session was open
   ([experiment 0006](docs/experiments/0006-post-handshake-state-query-result.md)).
   Windows Hello still works afterwards.
+- **The state reply is decoded but not yet understood.** The 2-byte `A.7`
+  reply is `01 00` both before and after the handshake, so the published
+  `tls_connected` flag does not track the TLS session on this reader
+  ([experiment 0007](docs/experiments/0007-decode-state-bytes-result.md),
+  [experiment 0008](docs/experiments/0008-state-before-and-after-handshake-result.md)).
 - Not yet done: TLS-protected data from the reader, image capture, enrollment or
   matching. There is no usable Linux driver.
 
@@ -81,6 +86,10 @@ Related but differently identified Goodix sensors may use substantially differen
   - [`docs/experiments/0005-linux-tls-handshake-pilot-result.md`](docs/experiments/0005-linux-tls-handshake-pilot-result.md) — Linux TLS-PSK handshake completed with the existing key.
   - [`docs/experiments/0006-post-handshake-state-query.md`](docs/experiments/0006-post-handshake-state-query.md) — plan: one read-only `A.7` state query after the handshake.
   - [`docs/experiments/0006-post-handshake-state-query-result.md`](docs/experiments/0006-post-handshake-state-query-result.md) — reader answered `A.7` in plaintext after the handshake.
+  - [`docs/experiments/0007-decode-state-bytes.md`](docs/experiments/0007-decode-state-bytes.md) — plan: record and decode the 2-byte `A.7` reply.
+  - [`docs/experiments/0007-decode-state-bytes-result.md`](docs/experiments/0007-decode-state-bytes-result.md) — reply `01 00`; layout inconclusive.
+  - [`docs/experiments/0008-state-before-and-after-handshake.md`](docs/experiments/0008-state-before-and-after-handshake.md) — plan: `A.7` before and after the handshake.
+  - [`docs/experiments/0008-state-before-and-after-handshake-result.md`](docs/experiments/0008-state-before-and-after-handshake-result.md) — same reply before and after; TLS does not change it.
   - [`docs/WINDOWS_CAPTURE_CLI.md`](docs/WINDOWS_CAPTURE_CLI.md) — experimental Windows capture helper guide.
 - [`tools/pcap_metadata.py`](tools/pcap_metadata.py) — local-only classic-PCAP metadata inspector; it never emits packet payload bytes.
 - [`tools/usbpcap_bulk_index.py`](tools/usbpcap_bulk_index.py) — local-only USBPcap bulk-header indexer; it skips transfer payloads entirely.
