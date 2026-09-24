@@ -309,6 +309,93 @@ class StateQueryTests(unittest.TestCase):
             self.assertNotIn('error', json.loads(output.getvalue()))
 
 
+class PreTLSStateQueryTests(unittest.TestCase):
+    """Experiment 0008: one extra fixed A.7 after A.4 and before D.0."""
+    def run_pre(self, pre, state='plain2'):
+        wire = SyntheticReader(state=state, pre=pre)
+        server = g.TLSServer(bytes(range(32)))
+        return wire, server, {}
+
+    def test_pre_tls_query_sits_between_firmware_and_tls_request(self):
+        wire, server, report = self.run_pre('plain2')
+        g.handshake(wire, server, report, pre_tls_query=True)
+        g.query_state(wire, server, report)
+        self.assertEqual(wire.commands, [0, 0xa8, 0xae, 0xd0, 0xd4, 0xae])
+        self.assertEqual(report['stage'], 'complete')
+        self.assertTrue(report['state_pre_query_ack'])
+        self.assertEqual(report['state_pre_reply_hex'], '0100')
+        self.assertEqual(report['state_pre_flags_byte0']['image_valid'], True)
+        self.assertEqual(report['state_pre_unknown_bits_byte1'], '00')
+        self.assertEqual(report['state_reply_hex'], '0702')  # post-TLS keys unchanged
+
+    def test_default_handshake_sends_no_pre_tls_query(self):
+        wire, server, report = self.run_pre('plain2')
+        g.handshake(wire, server, report)
+        self.assertEqual(wire.commands, [0, 0xa8, 0xd0, 0xd4])
+        self.assertFalse(any(k.startswith('state_pre_') for k in report))
+
+    def test_pre_tls_failures_stop_before_tls_request(self):
+        for pre, label in (('no_ack', 'invalid_command_ack'), ('wrong_cmd', 'unexpected_state_reply_command'),
+                           ('tls', 'unexpected_state_reply_flag'), ('flag_b0', 'unexpected_state_reply_flag')):
+            wire, server, report = self.run_pre(pre)
+            with self.assertRaisesRegex(g.ProbeError, label):
+                g.handshake(wire, server, report, pre_tls_query=True)
+            self.assertNotIn(0xd0, wire.commands)
+            self.assertEqual(report['stage'], 'state_pre_query')
+
+    def test_pre_tls_long_reply_is_shape_only(self):
+        wire, server, report = self.run_pre('plain')
+        g.handshake(wire, server, report, pre_tls_query=True)
+        self.assertEqual(report['state_pre_reply_length'], 16)
+        self.assertNotIn('state_pre_reply_hex', report)
+        self.assertNotIn(SECRET_STATE.hex(), repr(report))
+
+    def test_usb_boundary_allows_two_queries_only_when_enabled(self):
+        dev, core, util = usb_fakes()
+        with g.USBWire(core, util) as wire:
+            wire.arm_state_query(); wire.send(g.state_query_frame())
+            with self.assertRaisesRegex(g.ProbeError, 'state_query_already_sent'):
+                wire.arm_state_query()
+        dev, core, util = usb_fakes()
+        with g.USBWire(core, util, state_queries=2) as wire:
+            for _ in range(2):
+                wire.arm_state_query(); wire.send(g.state_query_frame())
+            with self.assertRaises(g.ProbeError):
+                wire.arm_state_query()
+            with self.assertRaises(g.ProbeError):
+                wire.send(g.state_query_frame())
+            self.assertEqual(len(dev.written), 2)
+        with self.assertRaises(g.ProbeError):
+            g.USBWire(core, util, state_queries=3)
+
+    def test_cli_pre_tls_flag_requires_query_state_and_wires_through(self):
+        from unittest.mock import patch
+        import contextlib, io, json
+        cases = ((['--run', '--query-state-pre-tls'], None, 'pre_tls_query_requires_query_state'),
+                 (['--run', '--query-state'], (1, False), None),
+                 (['--run', '--query-state', '--query-state-pre-tls'], (2, True), None))
+        for argv, expected, error in cases:
+            seen = {}
+            output = io.StringIO()
+            wire = unittest.mock.MagicMock()
+            wire.__enter__.return_value = wire; wire.cleanup_confirmed = True
+            def fake_usb(*a, **k): seen['queries'] = k.get('state_queries', 1); return wire
+            def fake_handshake(w, s, r, pre_tls_query=False):
+                seen['pre'] = pre_tls_query; r['stage'] = 'complete'; return r
+            with patch('sys.stdin.isatty', return_value=True), patch('os.geteuid', return_value=0), \
+                 patch.object(g, 'load_key', return_value=bytes(32)), patch.object(g, 'USBWire', side_effect=fake_usb), \
+                 patch.object(g, 'handshake', side_effect=fake_handshake), \
+                 patch.object(g, 'query_state', side_effect=lambda *a: None), \
+                 patch('resource.setrlimit'), contextlib.redirect_stdout(output):
+                g.main(argv)
+            result = json.loads(output.getvalue())
+            if error:
+                self.assertEqual(result['error'], error); self.assertEqual(seen, {})
+            else:
+                self.assertNotIn('error', result)
+                self.assertEqual((seen['queries'], seen['pre']), expected)
+
+
 SECRET_STATE = bytes.fromhex('5a' * 13 + 'c3')
 
 
@@ -320,9 +407,10 @@ def reply(cmd, payload):
 
 class SyntheticReader:
     """Real OpenSSL client behind a synthetic Goodix packet boundary."""
-    def __init__(self, bad=None, state=None):
+    def __init__(self, bad=None, state=None, pre=None):
         import ssl
         self.state = state
+        self.pre = pre  # reply mode for a pre-TLS A.7 (experiment 0008)
         self.bad = bad; self.commands = []; self.queue = []; self.client_done = False
         ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
         ctx.check_hostname = False; ctx.verify_mode = ssl.CERT_NONE
@@ -365,6 +453,14 @@ class SyntheticReader:
     def state_reply(self):
         import struct
         mode = self.state
+        if 0xd0 not in self.commands:
+            mode = self.pre
+            if mode == 'plain2':
+                self.queue.append(reply(0xae, b'\x01\x00')); return
+            if mode == 'tls':
+                body = b'\x17\x03\x03\x00\x20' + b'\x01' * 32
+                head = struct.pack('<BH', 0xb2, len(body))
+                self.queue.append(head + bytes([sum(head) & 255]) + body); return
         if mode == 'no_ack':
             self.queue[-1] = reply(0xb0, b'\xae\x00'); return
         if mode == 'plain2':

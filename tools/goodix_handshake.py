@@ -6,6 +6,8 @@ Protocol references (independent implementation; no upstream code executed):
   goodix-fp-linux-dev/goodix-fp-dump@cc43bb3 goodix.py (MIT)
 Commands allowed: fixed NOP, firmware query, D0 TLS request, D4 confirmation,
 and (only with --query-state, once, after D4) a fixed A7 QueryMcuState(0x55).
+With --query-state-pre-tls (experiment 0008) the same fixed A7 is also sent
+once between the firmware query and D0; the USB boundary then allows two.
 No images, outbound TLS application data, key reads/writes, firmware or reset
 commands. State-query replies are summarised by flag, command and length; a 2-byte
 plaintext reply is also printed and decoded as MCU state flags (experiment 0007).
@@ -200,7 +202,7 @@ def expect_ack(wire, command, raw=None):
         raise ProbeError('invalid_command_ack')
 
 
-def handshake(wire, server, report):
+def handshake(wire, server, report, pre_tls_query=False):
     import time
     report.update(tls_verified=False, device_confirmation_ack=False)
     for command, stage in ((0, 'nop'), (0xa8, 'firmware'), (0xd0, 'request_tls')):
@@ -219,6 +221,8 @@ def handshake(wire, server, report):
             cmd, firmware = unpack_command(payload)
             if flag != 0xa0 or cmd != command or firmware.rstrip(b'\0') != b'GF3206_RTSEC_APP_10063':
                 raise ProbeError('unexpected_firmware')
+            if pre_tls_query:
+                state_exchange(wire, server, report, 'state_pre_', allow_tls=False)
     report['stage'] = 'tls_handshake'
     # USB calls have their own deadline; bound even a synthetic endless peer.
     deadline = time.monotonic()+30
@@ -264,35 +268,48 @@ def decode_state(body):
     return out
 
 
-def query_state(wire, server, report):
-    """Send A.7 once after a confirmed handshake; record reply shape only."""
-    if report.get('stage') != 'complete' or not server.complete:
-        raise ProbeError('state_query_before_handshake')
-    report.update(stage='state_query', state_query_ack=False)
+def state_exchange(wire, server, report, prefix, allow_tls):
+    """Send the fixed A.7 once and record the reply under `prefix`.
+
+    Plaintext 0xa0/0xae replies of exactly 2 bytes are decoded (experiment
+    0007); other lengths are shape-only. TLS 0xb2 replies are only accepted
+    after the handshake (allow_tls) and never decoded.
+    """
+    key = lambda name: prefix + name[len('state_'):]
+    report.update({'stage': 'state_query' if prefix == 'state_' else prefix + 'query',
+                   key('state_query_ack'): False})
     wire.arm_state_query()
     wire.send(state_query_frame())
     expect_ack(wire, STATE_QUERY)
-    report['state_query_ack'] = True
+    report[key('state_query_ack')] = True
     flag, payload = unpack_frame(wire.receive(), (0xa0, 0xb0, TLS_DATA))
-    report.update(state_reply_flag='%02x' % flag, state_reply_length=len(payload))
+    report.update({key('state_reply_flag'): '%02x' % flag, key('state_reply_length'): len(payload)})
     if flag == 0xa0:
         cmd, body = unpack_command(payload)
-        report.update(state_reply_cmd='%02x' % cmd, state_reply_length=len(body))
+        report.update({key('state_reply_cmd'): '%02x' % cmd, key('state_reply_length'): len(body)})
         if cmd != STATE_QUERY:
             raise ProbeError('unexpected_state_reply_command')
         if len(body) == 2:
-            report.update(decode_state(body))
+            report.update({key(k): v for k, v in decode_state(body).items()})
         del body
-    elif flag == TLS_DATA:
-        report['state_reply_decrypted'] = False
+    elif flag == TLS_DATA and allow_tls:
+        report[key('state_reply_decrypted')] = False
         size = server.decrypt_length(payload)
-        report.update(state_reply_decrypted=size is not None)
+        report[key('state_reply_decrypted')] = size is not None
         if size is None:
             raise ProbeError('state_reply_not_decrypted')
-        report['state_reply_plaintext_length'] = size
+        report[key('state_reply_plaintext_length')] = size
     else:
         raise ProbeError('unexpected_state_reply_flag')
     del payload
+    return report
+
+
+def query_state(wire, server, report):
+    """Send A.7 once after a confirmed handshake (experiment 0006)."""
+    if report.get('stage') != 'complete' or not server.complete:
+        raise ProbeError('state_query_before_handshake')
+    state_exchange(wire, server, report, 'state_', allow_tls=True)
     report['stage'] = 'complete'
     return report
 
@@ -319,7 +336,9 @@ def load_key(directory='/root/goodix-psk'):
 
 class USBWire:
     """One claimed interface, fixed endpoints, no detach/reset/configuration."""
-    def __init__(self, core=None, util=None):
+    def __init__(self, core=None, util=None, state_queries=1):
+        if state_queries not in (1, 2):
+            raise ProbeError('state_query_limit_not_allowed')
         if core is None:
             import usb.core as core
             import usb.util as util
@@ -328,10 +347,11 @@ class USBWire:
         self.transfers = 0; self.sent = 0; self.cleanup_confirmed = False
         self.last_op = None
         self.state_query_armed = False
-        self.state_query_sent = False
+        self.state_query_limit = state_queries
+        self.state_queries_sent = 0
 
     def arm_state_query(self):
-        if self.state_query_sent:
+        if self.state_queries_sent >= self.state_query_limit:
             raise ProbeError('state_query_already_sent')
         self.state_query_armed = True
 
@@ -381,10 +401,10 @@ class USBWire:
         flag, payload = unpack_frame(raw)
         if flag == 0xa0:
             if raw == state_query_frame():
-                if not self.state_query_armed or self.state_query_sent:
+                if not self.state_query_armed or self.state_queries_sent >= self.state_query_limit:
                     raise ProbeError('state_query_not_armed')
                 self.state_query_armed = False
-                self.state_query_sent = True
+                self.state_queries_sent += 1
             elif raw != command_frame(payload[0]):
                 raise ProbeError('non_allowlisted_command_payload')
         else:
@@ -435,12 +455,15 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description='One handshake-only probe; does not scan or provision the reader.')
     parser.add_argument('--run', action='store_true', help='perform the approved single hardware test from an interactive root terminal')
     parser.add_argument('--query-state', action='store_true', help='experiment 0006: after the handshake, send one fixed A.7 QueryMcuState')
+    parser.add_argument('--query-state-pre-tls', action='store_true', help='experiment 0008: also send the same A.7 once before the TLS request (needs --query-state)')
     args = parser.parse_args(argv)
     report = dict(stage='preflight', tls_verified=False, device_confirmation_ack=False, usb_released=False)
     wire = report_server = None
     try:
         if not args.run:
             raise ProbeError('explicit_run_required')
+        if args.query_state_pre_tls and not args.query_state:
+            raise ProbeError('pre_tls_query_requires_query_state')
         if not sys.stdin.isatty() or os.geteuid() != 0 or not sys.platform.startswith('linux'):
             raise ProbeError('interactive_root_terminal_required')
         # No dumps or keylog file. Python cannot guarantee erasure of every heap copy.
@@ -453,9 +476,15 @@ def main(argv=None):
         server = TLSServer(key)
         report_server = server
         report['stage'] = 'usb_preflight'
-        wire = USBWire()
+        if args.query_state_pre_tls:
+            wire = USBWire(state_queries=2)
+        else:
+            wire = USBWire()
         with wire:
-            handshake(wire, server, report)
+            if args.query_state_pre_tls:
+                handshake(wire, server, report, pre_tls_query=True)
+            else:
+                handshake(wire, server, report)
             if args.query_state:
                 query_state(wire, server, report)
         report['usb_released'] = True
