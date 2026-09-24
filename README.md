@@ -22,6 +22,8 @@ An open, privacy-conscious research effort to support the Goodix USB fingerprint
   `tls_connected` flag does not track the TLS session on this reader
   ([experiment 0007](docs/experiments/0007-decode-state-bytes-result.md),
   [experiment 0008](docs/experiments/0008-state-before-and-after-handshake-result.md)).
+  It stays `01 00` with a finger resting on the sensor
+  ([experiment 0009](docs/experiments/0009-state-with-finger-on-sensor-result.md)).
 - Not yet done: TLS-protected data from the reader, image capture, enrollment or
   matching. There is no usable Linux driver.
 
@@ -90,6 +92,8 @@ Related but differently identified Goodix sensors may use substantially differen
   - [`docs/experiments/0007-decode-state-bytes-result.md`](docs/experiments/0007-decode-state-bytes-result.md) — reply `01 00`; layout inconclusive.
   - [`docs/experiments/0008-state-before-and-after-handshake.md`](docs/experiments/0008-state-before-and-after-handshake.md) — plan: `A.7` before and after the handshake.
   - [`docs/experiments/0008-state-before-and-after-handshake-result.md`](docs/experiments/0008-state-before-and-after-handshake-result.md) — same reply before and after; TLS does not change it.
+  - [`docs/experiments/0009-state-with-finger-on-sensor.md`](docs/experiments/0009-state-with-finger-on-sensor.md) — plan: `A.7` with a finger on the sensor.
+  - [`docs/experiments/0009-state-with-finger-on-sensor-result.md`](docs/experiments/0009-state-with-finger-on-sensor-result.md) — still `01 00`; a resting finger does not change it.
   - [`docs/WINDOWS_CAPTURE_CLI.md`](docs/WINDOWS_CAPTURE_CLI.md) — experimental Windows capture helper guide.
 - [`tools/pcap_metadata.py`](tools/pcap_metadata.py) — local-only classic-PCAP metadata inspector; it never emits packet payload bytes.
 - [`tools/usbpcap_bulk_index.py`](tools/usbpcap_bulk_index.py) — local-only USBPcap bulk-header indexer; it skips transfer payloads entirely.
