@@ -94,6 +94,7 @@ Related but differently identified Goodix sensors may use substantially differen
   - [`docs/experiments/0008-state-before-and-after-handshake-result.md`](docs/experiments/0008-state-before-and-after-handshake-result.md) — same reply before and after; TLS does not change it.
   - [`docs/experiments/0009-state-with-finger-on-sensor.md`](docs/experiments/0009-state-with-finger-on-sensor.md) — plan: `A.7` with a finger on the sensor.
   - [`docs/experiments/0009-state-with-finger-on-sensor-result.md`](docs/experiments/0009-state-with-finger-on-sensor-result.md) — still `01 00`; a resting finger does not change it.
+  - [`docs/experiments/0010-fdt-manual-state.md`](docs/experiments/0010-fdt-manual-state.md) — plan: one manual finger-detection (`3.3`) reading, finger off and on.
   - [`docs/WINDOWS_CAPTURE_CLI.md`](docs/WINDOWS_CAPTURE_CLI.md) — experimental Windows capture helper guide.
 - [`tools/pcap_metadata.py`](tools/pcap_metadata.py) — local-only classic-PCAP metadata inspector; it never emits packet payload bytes.
 - [`tools/usbpcap_bulk_index.py`](tools/usbpcap_bulk_index.py) — local-only USBPcap bulk-header indexer; it skips transfer payloads entirely.
