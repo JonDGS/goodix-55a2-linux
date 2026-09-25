@@ -1,7 +1,8 @@
 # Experiment 0011 plan: wait for one finger-down (FDT down) event
 
-Status: **approved by the operator; implemented, awaiting independent review
-and the two runs.**
+Status: **done.** Run 1 timed out and left the reader armed; the amendment
+below was reviewed, then run 1b and run 2 passed. Results:
+[`0011-fdt-down-event-result.md`](0011-fdt-down-event-result.md).
 
 ## Why
 
@@ -37,8 +38,8 @@ New flag `--fdt-down`. It requires `--query-state` and `--fdt-manual`, and
 is not allowed with `--query-state-pre-tls`. Frames sent:
 
 `0.0`, `A.4`, `D.0`, TLS-PSK handshake, `D.2`, `A.7 55`, `3.3` (0010's fixed
-payload), `A.7 55`, **`3.1` (fixed payload above)**, then **no further
-command**: the tool waits for one reply and releases USB.
+payload), `A.7 55`, **`3.1` (fixed payload above)**, one wait, then
+**`6.0` McuSwitchToSleepMode `01 00`** (amended, see below) and release.
 
 - The USB boundary allows exactly one `3.1` frame, byte-identical to the
   fixed one, only after it is armed, and only after the `3.3` exchange
@@ -60,8 +61,8 @@ command**: the tool waits for one reply and releases USB.
   - **Anything else** (another flag or command, wrong length, partial
     frame): stop with a fixed label.
 - No `A.7` after `3.1`: while armed, a touch could send an event in the
-  middle of an A.7 exchange. The run ends after the event or the timeout.
-- Not sent: `3.2` FDT up, `9.0` config, sleep/idle, reset, image request,
+  middle of an A.7 exchange. The run ends with the `6.0` below.
+- Not sent: `3.2` FDT up, `9.0` config, idle, reset, image request,
   key or firmware commands.
 
 ## Payload choice (known risk)
@@ -100,9 +101,38 @@ Same command both times, from an interactive root terminal on Fedora:
 ## Risk
 
 `3.1` leaves the MCU armed after the run. A later touch may queue an
-unrequested frame that nothing reads. This is volatile: a reboot, or the
-Windows driver's own init, clears it. Reboot between the two runs and
-before booting Windows.
+unrequested frame that nothing reads.
+
+## Amendment after run 1 (2026-09-25)
+
+Run 1 ended in a clean timeout (`fdt_down_event: false`), as expected. It
+also showed the risk above is real and **a warm Fedora reboot does not clear
+it**: the reader was never re-enumerated, and every later run, including
+plain `--run`, stopped at `unexpected_firmware` (`A.4` ACKed, next frame not
+the firmware reply). Booting Windows and unlocking once with a fingerprint
+recovered it; `--run` then passed.
+
+Changes, all tested against the synthetic reader and USB fakes:
+
+- **Disarm:** after every outcome of `3.1` (event, timeout, invalid or
+  partial reply, operator interrupt), one fixed `6.0`
+  McuSwitchToSleepMode (`01 00`, goodix-fp-dump `mcu_switch_to_sleep_mode`;
+  the Windows unlock trace also ends with `6.0`). The USB boundary allows it
+  once, only after `3.1`. Its ACK is required (`sleep_ack`); on an error
+  path the original label is kept and `sleep_ack` shows whether disarm
+  worked. A finger-down
+  event that races the timeout and arrives before the ACK is counted
+  (`fdt_down_late_events`), not decoded. Whether `6.0` really clears the
+  armed state on this reader is unverified; run 1b below checks it.
+- **Stale check:** every run (all modes) first listens for 0.5 s before
+  sending anything. Any frame there stops the run with `stale_reader_frame`
+  and only its flag, command and length (`stale_frame_*`).
+- **Firmware diagnosis:** `unexpected_firmware` now records the reply's
+  flag, command and length (`firmware_reply_*`), never its contents.
+
+**Run 1b (before run 2):** repeat the no-touch run, then immediately run
+plain `--run`. Pass: `sleep_ack: true`, then `--run` completes with no
+`stale_reader_frame`. If `--run` fails, stop; recover via Windows unlock.
 
 ## Stop conditions
 
@@ -111,5 +141,6 @@ happens only if run 1 completed.
 
 ## Recovery and follow-up
 
-Reboot if the reader misbehaves. After both runs, reboot into Windows and
-check fingerprint unlock. Record results in `0011-fdt-down-event-result.md`.
+If the reader misbehaves, boot Windows and unlock once (a warm reboot is
+not enough). After both runs, reboot into Windows and
+check fingerprint unlock. (Skipped by operator decision; see the result.) Record results in `0011-fdt-down-event-result.md`.
