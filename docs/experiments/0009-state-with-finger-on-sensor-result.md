@@ -68,7 +68,7 @@ condition, so the byte layout is still unresolved.
 ## Follow-up check
 
 After the run, the operator is to boot Windows and verify fingerprint unlock
-with Windows Hello. _Result: TODO (operator to confirm)._
+with Windows Hello. _Result: confirmed working (checked by the operator after experiment 0009, covering 0007–0009)._
 
 ## Not established
 
