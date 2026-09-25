@@ -11,12 +11,19 @@ once between the firmware query and D0; the USB boundary then allows two.
 No images, outbound TLS application data, key reads/writes, firmware or reset
 commands. State-query replies are summarised by flag, command and length; a 2-byte
 plaintext reply is also printed and decoded as MCU state flags (experiment 0007).
+With --fdt-manual (experiment 0010, needs --query-state) one fixed 3.3
+McuSwitchToFdtMode "manual" frame (Lambertz's 55a2 payload) is sent after the
+post-TLS A7, then A7 once more. Only its IRQ status and touch flag are printed;
+the 20 FDT base bytes are recorded by length only.
 """
 import struct
 
 MAX_FRAME = 16384
 STATE_QUERY = 0xae
 TLS_DATA = 0xb2
+FDT_MODE = 0x36
+# tlambertz/goodix-fingerprint-reversing capture.py: mcuSwitchToFdtMode (55a2).
+FDT_MANUAL_PAYLOAD = bytes.fromhex('0d0180a08093809b80948090808f8094808b808a8083')
 
 class ProbeError(Exception):
     """Messages are fixed diagnostic labels, never device/SSL contents."""
@@ -41,6 +48,12 @@ def command_frame(cmd):
 def state_query_frame():
     """The single fixed A.7 QueryMcuState(0x55) frame (experiment 0006)."""
     body = struct.pack('<BH', STATE_QUERY, 2) + b'\x55'
+    return frame(0xa0, body + bytes([(0xaa-sum(body)) & 255]))
+
+
+def fdt_manual_frame():
+    """The single fixed 3.3 McuSwitchToFdtMode manual frame (experiment 0010)."""
+    body = struct.pack('<BH', FDT_MODE, len(FDT_MANUAL_PAYLOAD)+1) + FDT_MANUAL_PAYLOAD
     return frame(0xa0, body + bytes([(0xaa-sum(body)) & 255]))
 
 
@@ -314,6 +327,39 @@ def query_state(wire, server, report):
     return report
 
 
+def fdt_manual(wire, server, report):
+    """Experiment 0010: one fixed 3.3 manual FDT after the post-TLS A.7, then A.7.
+
+    Expected reply (Windows log: len 25 incl. checksum): 24 bytes =
+    IRQ status (LE16), touch flag (LE16), 20-byte FDT base. Only the two
+    16-bit words are reported; the base is recorded by length only.
+    """
+    if report.get('stage') != 'complete' or not server.complete or 'state_query_ack' not in report:
+        raise ProbeError('fdt_before_state_query')
+    report.update(stage='fdt_manual', fdt_ack=False)
+    wire.arm_fdt()
+    wire.send(fdt_manual_frame())
+    expect_ack(wire, FDT_MODE)
+    report['fdt_ack'] = True
+    flag, payload = unpack_frame(wire.receive())
+    report['fdt_reply_flag'] = '%02x' % flag
+    if flag != 0xa0:
+        raise ProbeError('unexpected_fdt_reply_flag')
+    cmd, body = unpack_command(payload)
+    report.update(fdt_reply_cmd='%02x' % cmd, fdt_reply_length=len(body))
+    if cmd != FDT_MODE:
+        raise ProbeError('unexpected_fdt_reply_command')
+    if len(body) != 24:
+        raise ProbeError('unexpected_fdt_reply_length')
+    irq, touch = struct.unpack_from('<HH', body)
+    report.update(fdt_irq_status='%04x' % irq, fdt_touch_flag='%04x' % touch,
+                  fdt_touch_zones=bin(touch & 0x3ff).count('1'), fdt_base_length=len(body)-4)
+    del body, payload
+    state_exchange(wire, server, report, 'state_fdt_', allow_tls=True)
+    report['stage'] = 'complete'
+    return report
+
+
 def load_key(directory='/root/goodix-psk'):
     import os, stat
     directory_fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
@@ -336,9 +382,10 @@ def load_key(directory='/root/goodix-psk'):
 
 class USBWire:
     """One claimed interface, fixed endpoints, no detach/reset/configuration."""
-    def __init__(self, core=None, util=None, state_queries=1):
+    def __init__(self, core=None, util=None, state_queries=1, fdt=False):
         if state_queries not in (1, 2):
             raise ProbeError('state_query_limit_not_allowed')
+        self.fdt_allowed = fdt is True; self.fdt_armed = False; self.fdt_sent = False
         if core is None:
             import usb.core as core
             import usb.util as util
@@ -354,6 +401,11 @@ class USBWire:
         if self.state_queries_sent >= self.state_query_limit:
             raise ProbeError('state_query_already_sent')
         self.state_query_armed = True
+
+    def arm_fdt(self):
+        if not self.fdt_allowed or self.fdt_sent:
+            raise ProbeError('fdt_not_allowed')
+        self.fdt_armed = True
 
     def __enter__(self):
         import time
@@ -405,6 +457,11 @@ class USBWire:
                     raise ProbeError('state_query_not_armed')
                 self.state_query_armed = False
                 self.state_queries_sent += 1
+            elif raw == fdt_manual_frame():
+                if not self.fdt_allowed or not self.fdt_armed or self.fdt_sent:
+                    raise ProbeError('fdt_not_armed')
+                self.fdt_armed = False
+                self.fdt_sent = True
             elif raw != command_frame(payload[0]):
                 raise ProbeError('non_allowlisted_command_payload')
         else:
@@ -456,6 +513,7 @@ def main(argv=None):
     parser.add_argument('--run', action='store_true', help='perform the approved single hardware test from an interactive root terminal')
     parser.add_argument('--query-state', action='store_true', help='experiment 0006: after the handshake, send one fixed A.7 QueryMcuState')
     parser.add_argument('--query-state-pre-tls', action='store_true', help='experiment 0008: also send the same A.7 once before the TLS request (needs --query-state)')
+    parser.add_argument('--fdt-manual', action='store_true', help='experiment 0010: after the post-TLS A.7, send one fixed 3.3 manual FDT, then A.7 again (needs --query-state; not with --query-state-pre-tls)')
     args = parser.parse_args(argv)
     report = dict(stage='preflight', tls_verified=False, device_confirmation_ack=False, usb_released=False)
     wire = report_server = None
@@ -464,6 +522,10 @@ def main(argv=None):
             raise ProbeError('explicit_run_required')
         if args.query_state_pre_tls and not args.query_state:
             raise ProbeError('pre_tls_query_requires_query_state')
+        if args.fdt_manual and not args.query_state:
+            raise ProbeError('fdt_manual_requires_query_state')
+        if args.fdt_manual and args.query_state_pre_tls:
+            raise ProbeError('fdt_manual_excludes_pre_tls_query')
         if not sys.stdin.isatty() or os.geteuid() != 0 or not sys.platform.startswith('linux'):
             raise ProbeError('interactive_root_terminal_required')
         # No dumps or keylog file. Python cannot guarantee erasure of every heap copy.
@@ -476,7 +538,9 @@ def main(argv=None):
         server = TLSServer(key)
         report_server = server
         report['stage'] = 'usb_preflight'
-        if args.query_state_pre_tls:
+        if args.fdt_manual:
+            wire = USBWire(state_queries=2, fdt=True)
+        elif args.query_state_pre_tls:
             wire = USBWire(state_queries=2)
         else:
             wire = USBWire()
@@ -487,6 +551,8 @@ def main(argv=None):
                 handshake(wire, server, report)
             if args.query_state:
                 query_state(wire, server, report)
+            if args.fdt_manual:
+                fdt_manual(wire, server, report)
         report['usb_released'] = True
     except ProbeError as exc:
         report['error'] = str(exc)  # ProbeError text is fixed labels only

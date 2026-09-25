@@ -396,7 +396,114 @@ class PreTLSStateQueryTests(unittest.TestCase):
                 self.assertEqual((seen['queries'], seen['pre']), expected)
 
 
+class FDTManualTests(unittest.TestCase):
+    """Experiment 0010: one fixed 3.3 manual FDT after the post-TLS A.7, then A.7."""
+    def run_fdt(self, fdt='ok'):
+        wire = SyntheticReader(state='plain2', fdt=fdt)
+        server = g.TLSServer(bytes(range(32)))
+        report = g.handshake(wire, server, {})
+        g.query_state(wire, server, report)
+        return wire, server, report
+
+    def test_fixed_fdt_frame_matches_prior_work(self):
+        raw = g.fdt_manual_frame()
+        cmd, body = g.unpack_command(g.unpack_frame(raw)[1])
+        self.assertEqual((cmd, body.hex()), (0x36, '0d0180a08093809b80948090808f8094808b808a8083'))
+        self.assertEqual(len(raw), 4 + 3 + 22 + 1)
+
+    def test_fdt_reports_words_and_base_length_only(self):
+        wire, server, report = self.run_fdt()
+        g.fdt_manual(wire, server, report)
+        self.assertEqual(wire.commands, [0, 0xa8, 0xd0, 0xd4, 0xae, 0x36, 0xae])
+        self.assertEqual(report['stage'], 'complete')
+        self.assertTrue(report['fdt_ack'])
+        self.assertEqual((report['fdt_reply_flag'], report['fdt_reply_cmd'], report['fdt_reply_length']), ('a0', '36', 24))
+        self.assertEqual((report['fdt_irq_status'], report['fdt_touch_flag'], report['fdt_touch_zones']), ('0100', '03ff', 10))
+        self.assertEqual(report['fdt_base_length'], 20)
+        self.assertEqual(report['state_fdt_reply_hex'], '0702')
+        self.assertTrue(report['state_fdt_query_ack'])
+        self.assertNotIn(SECRET_FDT_BASE.hex(), repr(report))
+        self.assertNotIn(SECRET_FDT_BASE.hex()[:8], repr(report))
+
+    def test_fdt_failures_stop_before_second_state_query(self):
+        for fdt, label in (('no_ack', 'invalid_command_ack'), ('wrong_cmd', 'unexpected_fdt_reply_command'),
+                           ('short', 'unexpected_fdt_reply_length'), ('long', 'unexpected_fdt_reply_length'),
+                           ('tls', 'invalid_frame_header'), ('flag_b0', 'unexpected_fdt_reply_flag')):
+            wire, server, report = self.run_fdt(fdt)
+            with self.assertRaisesRegex(g.ProbeError, label):
+                g.fdt_manual(wire, server, report)
+            self.assertEqual(wire.commands.count(0xae), 1)
+            self.assertEqual(report['stage'], 'fdt_manual')
+            self.assertNotIn(SECRET_FDT_BASE.hex(), repr(report))
+
+    def test_fdt_requires_completed_post_tls_state_query(self):
+        wire = SyntheticReader(state='plain2', fdt='ok')
+        server = g.TLSServer(bytes(range(32)))
+        report = g.handshake(wire, server, {})
+        with self.assertRaisesRegex(g.ProbeError, 'fdt_before_state_query'):
+            g.fdt_manual(wire, server, report)
+        self.assertNotIn(0x36, wire.commands)
+
+    def test_usb_boundary_allows_fdt_once_only_when_enabled_and_armed(self):
+        dev, core, util = usb_fakes()
+        with g.USBWire(core, util) as wire:
+            with self.assertRaises(g.ProbeError):
+                wire.arm_fdt()
+            with self.assertRaises(g.ProbeError):
+                wire.send(g.fdt_manual_frame())
+            self.assertEqual(dev.written, [])
+        dev, core, util = usb_fakes()
+        with g.USBWire(core, util, state_queries=2, fdt=True) as wire:
+            with self.assertRaisesRegex(g.ProbeError, 'fdt_not_armed'):
+                wire.send(g.fdt_manual_frame())
+            wire.arm_fdt(); wire.send(g.fdt_manual_frame())
+            with self.assertRaises(g.ProbeError):
+                wire.arm_fdt()
+            with self.assertRaises(g.ProbeError):
+                wire.send(g.fdt_manual_frame())
+            # Any other 0x36 payload (e.g. prior-work FDT-down) stays refused.
+            import struct
+            other = bytes.fromhex('0c0180b980b480b580af80b480ac80b280a780ab80a5')
+            with self.assertRaises(g.ProbeError):
+                wire.send(reply(0x36, other))
+            with self.assertRaises(g.ProbeError):
+                wire.send(reply(0x32, other))
+            self.assertEqual(len(dev.written), 1)
+
+    def test_cli_fdt_flag_rules_and_wiring(self):
+        from unittest.mock import patch
+        import contextlib, io, json
+        cases = ((['--run', '--fdt-manual'], None, 'fdt_manual_requires_query_state'),
+                 (['--run', '--query-state', '--query-state-pre-tls', '--fdt-manual'], None, 'fdt_manual_excludes_pre_tls_query'),
+                 (['--run', '--query-state'], (1, False, False), None),
+                 (['--run', '--query-state', '--fdt-manual'], (2, True, True), None))
+        for argv, expected, error in cases:
+            seen = {}
+            output = io.StringIO()
+            wire = unittest.mock.MagicMock()
+            wire.__enter__.return_value = wire; wire.cleanup_confirmed = True
+            def fake_usb(*a, **k):
+                seen['queries'] = k.get('state_queries', 1); seen['fdt_wire'] = k.get('fdt', False); return wire
+            def fake_handshake(w, s, r, pre_tls_query=False):
+                r['stage'] = 'complete'; return r
+            def fake_fdt(*a): seen['fdt_called'] = True
+            with patch('sys.stdin.isatty', return_value=True), patch('os.geteuid', return_value=0), \
+                 patch.object(g, 'load_key', return_value=bytes(32)), patch.object(g, 'USBWire', side_effect=fake_usb), \
+                 patch.object(g, 'handshake', side_effect=fake_handshake), \
+                 patch.object(g, 'query_state', side_effect=lambda *a: None), \
+                 patch.object(g, 'fdt_manual', side_effect=fake_fdt), \
+                 patch('resource.setrlimit'), contextlib.redirect_stdout(output):
+                g.main(argv)
+            result = json.loads(output.getvalue())
+            if error:
+                self.assertEqual(result['error'], error); self.assertEqual(seen, {})
+            else:
+                self.assertNotIn('error', result)
+                self.assertEqual((seen['queries'], seen['fdt_wire'], seen.get('fdt_called', False)), expected)
+
+
 SECRET_STATE = bytes.fromhex('5a' * 13 + 'c3')
+SECRET_FDT_BASE = bytes.fromhex('c7e1' * 10)
 
 
 def reply(cmd, payload):
@@ -407,9 +514,10 @@ def reply(cmd, payload):
 
 class SyntheticReader:
     """Real OpenSSL client behind a synthetic Goodix packet boundary."""
-    def __init__(self, bad=None, state=None, pre=None):
+    def __init__(self, bad=None, state=None, pre=None, fdt=None):
         import ssl
         self.state = state
+        self.fdt = fdt  # reply mode for a 3.3 manual FDT (experiment 0010)
         self.pre = pre  # reply mode for a pre-TLS A.7 (experiment 0008)
         self.bad = bad; self.commands = []; self.queue = []; self.client_done = False
         ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
@@ -446,8 +554,31 @@ class SyntheticReader:
             self.advance()
         elif cmd == 0xae:
             self.state_reply()
+        elif cmd == 0x36:
+            self.fdt_reply()
+
+    def fdt_reply(self):
+        import struct
+        mode = self.fdt
+        body = struct.pack('<HH', 0x100, 0x3ff) + SECRET_FDT_BASE
+        if mode == 'no_ack':
+            self.queue[-1] = reply(0xb0, b'\x36\x00'); return
+        if mode == 'short':
+            body = body[:-2]
+        elif mode == 'long':
+            body += b'\0\0'
+        elif mode == 'flag_b0':
+            self.queue.append(g.frame(0xb0, b'\x16\x03\x03\x00\x01x')); return
+        elif mode == 'tls':
+            data = b'\x17\x03\x03\x00\x20' + b'\x01' * 32
+            head = struct.pack('<BH', 0xb2, len(data))
+            self.queue.append(head + bytes([sum(head) & 255]) + data); return
+        self.queue.append(reply(0xae if mode == 'wrong_cmd' else 0x36, body))
 
     def arm_state_query(self):
+        pass
+
+    def arm_fdt(self):
         pass
 
     def state_reply(self):
