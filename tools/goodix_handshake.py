@@ -15,6 +15,9 @@ With --fdt-manual (experiment 0010, needs --query-state) one fixed 3.3
 McuSwitchToFdtMode "manual" frame (Lambertz's 55a2 payload) is sent after the
 post-TLS A7, then A7 once more. Only its IRQ status and touch flag are printed;
 the 20 FDT base bytes are recorded by length only.
+With --fdt-up (experiment 0012, needs --fdt-down), and only after a valid
+finger-down event, one fixed 3.2 McuSwitchToFdtUp follows and one more wait
+of up to 15 s for the finger-up event, still before the single 6.0.
 With --fdt-down (experiment 0011, needs --fdt-manual) one fixed 3.1
 McuSwitchToFdtDown frame is sent after that, then the tool waits up to 15 s
 for one unrequested finger-down event. A clean timeout is a result; the event
@@ -37,6 +40,11 @@ FDT_DOWN = 0x32
 # tlambertz/goodix-fingerprint-reversing capture.py: waitForFinger (55a2).
 FDT_DOWN_PAYLOAD = bytes.fromhex('0c0180b980b480b580af80b480ac80b280a780ab80a5')
 FDT_DOWN_WINDOW = 15.0
+FDT_UP = 0x34
+# Windows unlock log 3_wbdi_singleunlock.log lines 724-727: the second 3.2
+# the driver leaves armed (op 0e, 01, ten 16-bit thresholds).
+FDT_UP_PAYLOAD = bytes.fromhex('0e0180a08093809b80948090808f8094808b808a8083')
+FDT_UP_WINDOW = 15.0
 SLEEP_MODE = 0x60
 # goodix-fp-dump goodix.py mcu_switch_to_sleep_mode(); Windows unlock ends with 6.0.
 SLEEP_PAYLOAD = b'\x01\x00'
@@ -77,6 +85,12 @@ def fdt_manual_frame():
 def fdt_down_frame():
     """The single fixed 3.1 McuSwitchToFdtDown frame (experiment 0011)."""
     body = struct.pack('<BH', FDT_DOWN, len(FDT_DOWN_PAYLOAD)+1) + FDT_DOWN_PAYLOAD
+    return frame(0xa0, body + bytes([(0xaa-sum(body)) & 255]))
+
+
+def fdt_up_frame():
+    """The single fixed 3.2 McuSwitchToFdtUp frame (experiment 0012)."""
+    body = struct.pack('<BH', FDT_UP, len(FDT_UP_PAYLOAD)+1) + FDT_UP_PAYLOAD
     return frame(0xa0, body + bytes([(0xaa-sum(body)) & 255]))
 
 
@@ -409,7 +423,7 @@ def fdt_manual(wire, server, report):
     return report
 
 
-def fdt_down(wire, server, report, notify=None):
+def fdt_down(wire, server, report, notify=None, up=False):
     """Experiment 0011: one fixed 3.1 after the 0010 sequence, then wait once.
 
     The reader ACKs at once and later sends an unrequested 0x32 frame with a
@@ -417,6 +431,9 @@ def fdt_down(wire, server, report, notify=None):
     finger lands. A clean timeout is a result. Every path after 3.1 (event,
     timeout, bad reply, interrupt) ends with one fixed 6.0 so the reader is
     not left armed; an error keeps its own label.
+    With up=True (experiment 0012) and only after a valid finger-down
+    event, one fixed 3.2 follows and one wait for the finger-up event, still
+    before the single 6.0.
     """
     import time
     if (report.get('stage') != 'complete' or not server.complete or not report.get('fdt_ack')
@@ -426,7 +443,7 @@ def fdt_down(wire, server, report, notify=None):
     wire.arm_fdt_down()
     wire.send(fdt_down_frame())
     try:
-        return fdt_down_wait(wire, report, notify)
+        return fdt_down_wait(wire, report, notify, up)
     except BaseException:
         # 3.1 is out: never release USB with the reader armed. Best effort;
         # the original error label wins, sleep_ack records the outcome.
@@ -443,7 +460,7 @@ def fdt_down(wire, server, report, notify=None):
         raise
 
 
-def fdt_down_wait(wire, report, notify):
+def fdt_down_wait(wire, report, notify, up=False):
     import time
     expect_ack(wire, FDT_DOWN)
     report['fdt_down_ack'] = True
@@ -458,51 +475,84 @@ def fdt_down_wait(wire, report, notify):
     else:
         decode_down_event(raw, start, report)
         del raw
+    if up:
+        if report['fdt_down_event']:
+            fdt_up_wait(wire, report, notify)
+        else:
+            report['fdt_up_skipped'] = True  # no finger down: 3.2 never sent
     disarm(wire, report)
     report['stage'] = 'complete'
     return report
 
 
-def decode_down_event(raw, start, report):
+def fdt_up_wait(wire, report, notify):
+    """One fixed 3.2 right after the down event, then one up-event wait."""
     import time
-    report['fdt_down_wait_ms'] = int(round((time.monotonic()-start)*10))*100
+    report.update(stage='fdt_up', fdt_up_ack=False)
+    wire.arm_fdt_up()
+    wire.send(fdt_up_frame())
+    expect_ack(wire, FDT_UP)
+    report['fdt_up_ack'] = True
+    start = time.monotonic()
+    notify('finger down: lift it now (waiting %d s)' % int(FDT_UP_WINDOW))
+    raw = wire.receive_event(FDT_UP_WINDOW)
+    if raw is None:
+        report['fdt_up_event'] = False
+    else:
+        decode_fdt_event(raw, start, report, 'fdt_up_', FDT_UP)
+        del raw
+
+
+def decode_down_event(raw, start, report):
+    decode_fdt_event(raw, start, report, 'fdt_down_', FDT_DOWN)
+
+
+def decode_fdt_event(raw, start, report, prefix, command):
+    import time
+    report[prefix+'wait_ms'] = int(round((time.monotonic()-start)*10))*100
     flag, payload = unpack_frame(raw, (0xa0, 0xb0, TLS_DATA))
-    report['fdt_down_reply_flag'] = '%02x' % flag
+    report[prefix+'reply_flag'] = '%02x' % flag
     if flag != 0xa0:
-        raise ProbeError('unexpected_fdt_down_reply_flag')
+        raise ProbeError('unexpected_'+prefix+'reply_flag')
     cmd, body = unpack_command(payload)
-    report.update(fdt_down_reply_cmd='%02x' % cmd, fdt_down_reply_length=len(body))
-    if cmd != FDT_DOWN:
-        raise ProbeError('unexpected_fdt_down_reply_command')
+    report.update({prefix+'reply_cmd': '%02x' % cmd, prefix+'reply_length': len(body)})
+    if cmd != command:
+        raise ProbeError('unexpected_'+prefix+'reply_command')
     if len(body) != 24:
-        raise ProbeError('unexpected_fdt_down_reply_length')
+        raise ProbeError('unexpected_'+prefix+'reply_length')
     irq, touch = struct.unpack_from('<HH', body)
-    report.update(fdt_down_event=True, fdt_down_irq_status='%04x' % irq, fdt_down_touch_flag='%04x' % touch,
-                  fdt_down_touch_zones=bin(touch & 0x3ff).count('1'), fdt_down_base_length=len(body)-4)
+    report.update({prefix+'event': True, prefix+'irq_status': '%04x' % irq, prefix+'touch_flag': '%04x' % touch,
+                   prefix+'touch_zones': bin(touch & 0x3ff).count('1'), prefix+'base_length': len(body)-4})
     del body, payload
 
 
-def is_down_event(raw):
+def late_event_command(raw):
+    """FDT_DOWN or FDT_UP for a well-formed 24-byte event frame, else None."""
     try:
         flag, payload = unpack_frame(raw, (0xa0, 0xb0, TLS_DATA))
         if flag != 0xa0:
-            return False
+            return None
         cmd, body = unpack_command(payload)
-        return cmd == FDT_DOWN and len(body) == 24
+        return cmd if cmd in (FDT_DOWN, FDT_UP) and len(body) == 24 else None
     except ProbeError:
-        return False
+        return None
 
 
 def disarm(wire, report):
-    """One fixed 6.0 after the 3.1 outcome. A finger-down event that races
-    the timeout may arrive before the ACK; it is counted, never decoded."""
+    """One fixed 6.0 after the 3.1 (and 3.2) outcome. A finger-down or
+    finger-up event that races the timeout may arrive before the ACK; it is
+    counted, never decoded. An up event counts only if 3.2 was sent."""
     report.update(stage='disarm', sleep_ack=False)
     wire.arm_sleep()
     wire.send(sleep_frame())
     for _ in range(3):
         raw = wire.receive()
-        if is_down_event(raw):
-            report['fdt_down_late_events'] = report.get('fdt_down_late_events', 0)+1
+        late = late_event_command(raw)
+        if late == FDT_UP and not getattr(wire, 'fdt_up_sent', False):
+            late = None  # no 3.2 sent: not a late event, fails the ACK check
+        if late is not None:
+            key = 'fdt_up_late_events' if late == FDT_UP else 'fdt_down_late_events'
+            report[key] = report.get(key, 0)+1
             continue
         expect_ack(wire, SLEEP_MODE, raw)
         report['sleep_ack'] = True
@@ -532,13 +582,16 @@ def load_key(directory='/root/goodix-psk'):
 
 class USBWire:
     """One claimed interface, fixed endpoints, no detach/reset/configuration."""
-    def __init__(self, core=None, util=None, state_queries=1, fdt=False, fdt_down=False):
+    def __init__(self, core=None, util=None, state_queries=1, fdt=False, fdt_down=False, fdt_up=False):
         if state_queries not in (1, 2):
             raise ProbeError('state_query_limit_not_allowed')
         if fdt_down is True and fdt is not True:
             raise ProbeError('fdt_down_requires_fdt')
         self.fdt_allowed = fdt is True; self.fdt_armed = False; self.fdt_sent = False
+        if fdt_up is True and fdt_down is not True:
+            raise ProbeError('fdt_up_requires_fdt_down')
         self.fdt_down_allowed = fdt_down is True; self.fdt_down_armed = False; self.fdt_down_sent = False
+        self.fdt_up_allowed = fdt_up is True; self.fdt_up_armed = False; self.fdt_up_sent = False
         self.window_end = None
         self.sleep_armed = False; self.sleep_sent = False; self.sent_any = False
         if core is None:
@@ -567,6 +620,11 @@ class USBWire:
             raise ProbeError('fdt_down_not_allowed')
         self.fdt_down_armed = True
 
+    def arm_fdt_up(self):
+        if not self.fdt_up_allowed or not self.fdt_down_sent or self.fdt_up_sent or self.sleep_sent:
+            raise ProbeError('fdt_up_not_allowed')
+        self.fdt_up_armed = True
+
     def arm_sleep(self):
         if not self.fdt_down_sent or self.sleep_sent:
             raise ProbeError('sleep_not_allowed')
@@ -574,8 +632,8 @@ class USBWire:
 
     def __enter__(self):
         import time
-        # 0011 adds a 15 s wait window; only that mode gets the longer deadline.
-        self.deadline = time.monotonic()+(70 if self.fdt_down_allowed else 45)
+        # 0011 adds a 15 s wait window, 0012 a second; only those modes get longer.
+        self.deadline = time.monotonic()+(90 if self.fdt_up_allowed else 70 if self.fdt_down_allowed else 45)
         try:
             self.devices = list(self.core.find(find_all=True, idVendor=0x27c6, idProduct=0x55a2))
             if len(self.devices) != 1:
@@ -636,6 +694,12 @@ class USBWire:
                     raise ProbeError('fdt_down_not_armed')
                 self.fdt_down_armed = False
                 self.fdt_down_sent = True
+            elif raw == fdt_up_frame():
+                if (not self.fdt_up_allowed or not self.fdt_up_armed or self.fdt_up_sent
+                        or not self.fdt_down_sent or self.sleep_sent):
+                    raise ProbeError('fdt_up_not_armed')
+                self.fdt_up_armed = False
+                self.fdt_up_sent = True
             elif raw == sleep_frame():
                 if not self.sleep_armed or self.sleep_sent or not self.fdt_down_sent:
                     raise ProbeError('sleep_not_armed')
@@ -693,9 +757,10 @@ class USBWire:
         Read timeouts with an empty buffer are retried until the window ends;
         a timeout with a partial frame buffered is an error.
         """
-        if not self.fdt_down_sent:
+        if not self.fdt_down_sent or self.sleep_sent:
             raise ProbeError('fdt_down_not_sent')
-        return self.receive_window(seconds, 'partial_fdt_down_frame')
+        label = 'partial_fdt_up_frame' if self.fdt_up_sent else 'partial_fdt_down_frame'
+        return self.receive_window(seconds, label)
 
     def receive_stale(self, seconds):
         """Before the first send only: any frame here was not asked for."""
@@ -733,6 +798,7 @@ def main(argv=None):
     parser.add_argument('--query-state-pre-tls', action='store_true', help='experiment 0008: also send the same A.7 once before the TLS request (needs --query-state)')
     parser.add_argument('--fdt-manual', action='store_true', help='experiment 0010: after the post-TLS A.7, send one fixed 3.3 manual FDT, then A.7 again (needs --query-state; not with --query-state-pre-tls)')
     parser.add_argument('--fdt-down', action='store_true', help='experiment 0011: after --fdt-manual, send one fixed 3.1 FDT down, wait up to 15 s for one finger-down event, then one fixed 6.0 sleep (needs --fdt-manual)')
+    parser.add_argument('--fdt-up', action='store_true', help='experiment 0012: after a finger-down event, send one fixed 3.2 FDT up and wait up to 15 s for one finger-up event, before the 6.0 (needs --fdt-down)')
     args = parser.parse_args(argv)
     report = dict(stage='preflight', tls_verified=False, device_confirmation_ack=False, usb_released=False)
     wire = report_server = None
@@ -747,6 +813,8 @@ def main(argv=None):
             raise ProbeError('fdt_manual_excludes_pre_tls_query')
         if args.fdt_down and not args.fdt_manual:
             raise ProbeError('fdt_down_requires_fdt_manual')
+        if args.fdt_up and not args.fdt_down:
+            raise ProbeError('fdt_up_requires_fdt_down')
         if not sys.stdin.isatty() or os.geteuid() != 0 or not sys.platform.startswith('linux'):
             raise ProbeError('interactive_root_terminal_required')
         # No dumps or keylog file. Python cannot guarantee erasure of every heap copy.
@@ -760,7 +828,7 @@ def main(argv=None):
         report_server = server
         report['stage'] = 'usb_preflight'
         if args.fdt_manual:
-            wire = USBWire(state_queries=2, fdt=True, fdt_down=args.fdt_down)
+            wire = USBWire(state_queries=2, fdt=True, fdt_down=args.fdt_down, fdt_up=args.fdt_up)
         elif args.query_state_pre_tls:
             wire = USBWire(state_queries=2)
         else:
@@ -774,7 +842,9 @@ def main(argv=None):
                 query_state(wire, server, report)
             if args.fdt_manual:
                 fdt_manual(wire, server, report)
-            if args.fdt_down:
+            if args.fdt_up:
+                fdt_down(wire, server, report, up=True)
+            elif args.fdt_down:
                 fdt_down(wire, server, report)
         report['usb_released'] = True
     except ProbeError as exc:
