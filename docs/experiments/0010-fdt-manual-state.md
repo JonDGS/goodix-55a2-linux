@@ -1,7 +1,7 @@
 # Experiment 0010 plan: one manual finger-detection (FDT) reading
 
-Status: **approved by the operator; implemented, awaiting independent review
-and the two runs.**
+Status: **done.** Result:
+[`0010-fdt-manual-state-result.md`](0010-fdt-manual-state-result.md).
 
 ## Why
 
