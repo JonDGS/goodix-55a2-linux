@@ -514,8 +514,14 @@ def reply(cmd, payload):
 
 class SyntheticReader:
     """Real OpenSSL client behind a synthetic Goodix packet boundary."""
-    def __init__(self, bad=None, state=None, pre=None, fdt=None):
+    def __init__(self, bad=None, state=None, pre=None, fdt=None, down=None, stale=None, sleep=None, up=None):
         import ssl
+        self.up = up  # event mode after a 3.2 FDT up (experiment 0012)
+        self.stale = stale  # frame left queued by an earlier run
+        self.sleep = sleep  # 6.0 reply mode
+        self.stale_windows = []
+        self.down = down  # event mode after a 3.1 FDT down (experiment 0011)
+        self.event_windows = []
         self.state = state
         self.fdt = fdt  # reply mode for a 3.3 manual FDT (experiment 0010)
         self.pre = pre  # reply mode for a pre-TLS A.7 (experiment 0008)
@@ -556,6 +562,65 @@ class SyntheticReader:
             self.state_reply()
         elif cmd == 0x36:
             self.fdt_reply()
+        elif cmd == 0x32:
+            self.down_ack()
+        elif cmd == 0x34:
+            if self.up == 'no_ack':
+                self.queue[-1] = reply(0xb0, b'\x34\x00')
+        elif cmd == 0x60:
+            if self.sleep == 'late_event':
+                self.queue.insert(len(self.queue)-1, reply(0x32, SECRET_FDT_BASE[:4] + SECRET_FDT_BASE))
+            elif self.sleep == 'late_up':
+                self.queue.insert(len(self.queue)-1, reply(0x34, SECRET_FDT_BASE[:4] + SECRET_FDT_BASE))
+            elif self.sleep == 'no_ack':
+                self.queue[-1] = reply(0xb0, b'\x60\x00')
+
+    def receive_stale(self, seconds):
+        assert not self.commands, 'stale check after a send'
+        self.stale_windows.append(seconds)
+        return self.stale
+
+    def arm_sleep(self):
+        pass
+
+    def down_ack(self):
+        if self.down == 'no_ack':
+            self.queue[-1] = reply(0xb0, b'\x32\x00')
+
+    def down_event(self):
+        import struct
+        mode = self.down
+        body = struct.pack('<HH', 0x2, 0x1ed) + SECRET_FDT_BASE
+        if mode in (None, 'timeout'):
+            return None
+        if mode == 'short':
+            body = body[:-2]
+        elif mode == 'flag_b0':
+            return g.frame(0xb0, b'\x16\x03\x03\x00\x01x')
+        return reply(0x36 if mode == 'wrong_cmd' else 0x32, body)
+
+    def arm_fdt_down(self):
+        pass
+
+    def arm_fdt_up(self):
+        assert 0x32 in self.commands and 0x60 not in self.commands
+
+    def up_event(self):
+        import struct
+        mode = self.up
+        body = struct.pack('<HH', 0x4, 0x0) + SECRET_FDT_BASE
+        if mode in (None, 'timeout', 'no_ack'):
+            return None
+        if mode == 'short':
+            body = body[:-2]
+        elif mode == 'flag_b0':
+            return g.frame(0xb0, b'\x16\x03\x03\x00\x01x')
+        return reply(0x32 if mode == 'wrong_cmd' else 0x34, body)
+
+    def receive_event(self, seconds):
+        self.event_windows.append(seconds)
+        assert not self.queue, 'unread frames before the event wait'
+        return self.up_event() if 0x34 in self.commands else self.down_event()
 
     def fdt_reply(self):
         import struct
@@ -704,6 +769,265 @@ def usb_fakes(bad=None):
             dispose_resources=lambda *args: calls.append('dispose'))
     return dev, core, util
 
+class FDTDownTests(unittest.TestCase):
+    """Experiment 0011: one fixed 3.1 after the 0010 sequence, then one wait."""
+    def run_down(self, down='ok'):
+        wire = SyntheticReader(state='plain2', fdt='ok', down=down)
+        server = g.TLSServer(bytes(range(32)))
+        report = g.handshake(wire, server, {})
+        g.query_state(wire, server, report)
+        g.fdt_manual(wire, server, report)
+        return wire, server, report
+
+    def test_fixed_fdt_down_frame_matches_prior_work(self):
+        raw = g.fdt_down_frame()
+        cmd, body = g.unpack_command(g.unpack_frame(raw)[1])
+        self.assertEqual((cmd, body.hex()), (0x32, '0c0180b980b480b580af80b480ac80b280a780ab80a5'))
+        self.assertEqual(g.FDT_DOWN_WINDOW, 15.0)
+
+    def test_event_reports_words_and_base_length_only(self):
+        wire, server, report = self.run_down()
+        notes = []
+        g.fdt_down(wire, server, report, notify=notes.append)
+        self.assertEqual(wire.commands, [0, 0xa8, 0xd0, 0xd4, 0xae, 0x36, 0xae, 0x32, 0x60])
+        self.assertTrue(report['sleep_ack'])
+        self.assertEqual(wire.event_windows, [15.0])
+        self.assertEqual(notes, ['armed: touch the sensor now (waiting 15 s)'])
+        self.assertEqual(report['stage'], 'complete')
+        self.assertTrue(report['fdt_down_ack'] and report['fdt_down_event'])
+        self.assertEqual((report['fdt_down_irq_status'], report['fdt_down_touch_flag'], report['fdt_down_touch_zones']),
+                         ('0002', '01ed', 7))
+        self.assertEqual((report['fdt_down_reply_flag'], report['fdt_down_reply_cmd'], report['fdt_down_reply_length'],
+                          report['fdt_down_base_length']), ('a0', '32', 24, 20))
+        self.assertEqual(report['fdt_down_wait_ms'] % 100, 0)
+        self.assertNotIn(SECRET_FDT_BASE.hex(), repr(report))
+        self.assertNotIn(SECRET_FDT_BASE.hex()[:8], repr(report))
+
+    def test_clean_timeout_is_a_result(self):
+        wire, server, report = self.run_down('timeout')
+        g.fdt_down(wire, server, report, notify=lambda t: None)
+        self.assertEqual((report['stage'], report['fdt_down_event']), ('complete', False))
+        self.assertNotIn('fdt_down_touch_flag', report)
+        self.assertEqual(wire.commands[-2:], [0x32, 0x60])  # timeout disarms with 6.0
+        self.assertTrue(report['sleep_ack'])
+        self.assertFalse(wire.queue)
+
+    def test_late_event_before_sleep_ack_is_counted_not_decoded(self):
+        wire, server, report = self.run_down('timeout')
+        wire.sleep = 'late_event'
+        g.fdt_down(wire, server, report, notify=lambda t: None)
+        self.assertEqual((report['stage'], report['fdt_down_late_events'], report['sleep_ack']), ('complete', 1, True))
+        self.assertNotIn(SECRET_FDT_BASE.hex()[:8], repr(report))
+
+    def test_interrupt_during_wait_still_disarms_once(self):
+        wire, server, report = self.run_down('timeout')
+        def interrupted(seconds): raise KeyboardInterrupt
+        wire.receive_event = interrupted
+        with self.assertRaises(KeyboardInterrupt):
+            g.fdt_down(wire, server, report, notify=lambda t: None)
+        self.assertEqual(wire.commands[-2:], [0x32, 0x60])
+        self.assertEqual(wire.commands.count(0x60), 1)
+        self.assertTrue(report['sleep_ack'])
+
+    def test_disarm_failure_keeps_original_label(self):
+        wire, server, report = self.run_down('wrong_cmd')
+        wire.sleep = 'no_ack'
+        with self.assertRaisesRegex(g.ProbeError, 'unexpected_fdt_down_reply_command'):
+            g.fdt_down(wire, server, report, notify=lambda t: None)
+        self.assertEqual((wire.commands.count(0x60), report['sleep_ack']), (1, False))
+
+    def test_usb_partial_event_discards_buffer_then_disarms(self):
+        from unittest.mock import patch
+        dev, core, util = usb_fakes()
+        ack, event = reply(0xb0, b'\x32\x01'), reply(0x32, bytes(24))
+        sleep_ack = reply(0xb0, b'\x60\x01')
+        with g.USBWire(core, util, state_queries=2, fdt=True, fdt_down=True) as wire:
+            wire.arm_fdt(); wire.send(g.fdt_manual_frame())
+            reads = [ack, event[:10]]
+            def read(ep, size, timeout):
+                if reads: return reads.pop(0)
+                if dev.written[-1][4] == 0x60: return sleep_ack
+                raise core.USBTimeoutError()
+            dev.read = read
+            report = {'stage': 'complete', 'fdt_ack': True, 'state_fdt_query_ack': True}
+            with self.assertRaisesRegex(g.ProbeError, 'partial_fdt_down_frame'):
+                g.fdt_down(wire, type('S', (), {'complete': True})(), report, notify=lambda t: None)
+            self.assertEqual([w[4] for w in dev.written], [0x36, 0x32, 0x60])
+            self.assertTrue(report['sleep_ack'])
+
+    def test_missing_sleep_ack_is_an_error(self):
+        wire, server, report = self.run_down('timeout')
+        wire.sleep = 'no_ack'
+        with self.assertRaisesRegex(g.ProbeError, 'invalid_command_ack'):
+            g.fdt_down(wire, server, report, notify=lambda t: None)
+        self.assertEqual((report['stage'], report['sleep_ack']), ('disarm', False))
+
+    def test_failures_stop_with_fixed_labels(self):
+        for down, label in (('no_ack', 'invalid_command_ack'), ('wrong_cmd', 'unexpected_fdt_down_reply_command'),
+                            ('short', 'unexpected_fdt_down_reply_length'), ('flag_b0', 'unexpected_fdt_down_reply_flag')):
+            wire, server, report = self.run_down(down)
+            with self.assertRaisesRegex(g.ProbeError, label):
+                g.fdt_down(wire, server, report, notify=lambda t: None)
+            self.assertEqual(report['stage'], 'fdt_down')
+            self.assertEqual(wire.commands[-2:], [0x32, 0x60])  # disarmed despite the error
+            self.assertTrue(report['sleep_ack'])
+            self.assertNotIn(SECRET_FDT_BASE.hex(), repr(report))
+        wire, server, report = self.run_down('no_ack')
+        with self.assertRaises(g.ProbeError):
+            g.fdt_down(wire, server, report, notify=lambda t: None)
+        self.assertEqual(wire.event_windows, [])  # no wait without an ACK
+
+    def test_requires_completed_fdt_manual(self):
+        wire = SyntheticReader(state='plain2', fdt='ok', down='ok')
+        server = g.TLSServer(bytes(range(32)))
+        report = g.handshake(wire, server, {})
+        g.query_state(wire, server, report)
+        with self.assertRaisesRegex(g.ProbeError, 'fdt_down_before_fdt_manual'):
+            g.fdt_down(wire, server, report, notify=lambda t: None)
+        self.assertNotIn(0x32, wire.commands)
+
+    def test_usb_boundary_allows_fdt_down_once_after_fdt_manual(self):
+        dev, core, util = usb_fakes()
+        with g.USBWire(core, util, state_queries=2, fdt=True) as wire:
+            with self.assertRaises(g.ProbeError):
+                wire.arm_fdt_down()
+            with self.assertRaises(g.ProbeError):
+                wire.send(g.fdt_down_frame())
+            with self.assertRaises(g.ProbeError):
+                wire.receive_event(1)
+        with self.assertRaisesRegex(g.ProbeError, 'fdt_down_requires_fdt'):
+            g.USBWire(core, util, fdt_down=True)
+        dev, core, util = usb_fakes()
+        with g.USBWire(core, util, state_queries=2, fdt=True, fdt_down=True) as wire:
+            with self.assertRaises(g.ProbeError):
+                wire.arm_fdt_down()  # 3.3 not sent yet
+            wire.arm_fdt(); wire.send(g.fdt_manual_frame())
+            with self.assertRaisesRegex(g.ProbeError, 'fdt_down_not_armed'):
+                wire.send(g.fdt_down_frame())
+            wire.arm_fdt_down(); wire.send(g.fdt_down_frame())
+            with self.assertRaises(g.ProbeError):
+                wire.arm_fdt_down()
+            with self.assertRaises(g.ProbeError):
+                wire.send(g.fdt_down_frame())
+            other = bytes.fromhex('0c0180b980b380b580af80b480ad80b280a780ab80a5')  # Windows-log thresholds
+            for cmd in (0x32, 0x34):
+                with self.assertRaises(g.ProbeError):
+                    wire.send(reply(cmd, other))
+            with self.assertRaises(g.ProbeError):
+                wire.send(reply(0x34, g.FDT_DOWN_PAYLOAD))
+            self.assertEqual(len(dev.written), 2)
+
+    def test_deadline_is_longer_only_in_fdt_down_mode(self):
+        import time
+        for kwargs, expected in (({}, 45), (dict(state_queries=2, fdt=True), 45),
+                                 (dict(state_queries=2, fdt=True, fdt_down=True), 70)):
+            dev, core, util = usb_fakes()
+            with g.USBWire(core, util, **kwargs) as wire:
+                self.assertAlmostEqual(wire.deadline-time.monotonic(), expected, delta=1)
+
+    def test_receive_event_retries_clean_timeouts_then_returns_none(self):
+        from unittest.mock import patch
+        dev, core, util = usb_fakes()
+        clock = [1000.0]
+        seen = []
+        def timeout(ep, size, timeout):
+            seen.append(timeout); clock[0] += timeout/1000; raise core.USBTimeoutError()
+        with patch('time.monotonic', side_effect=lambda: clock[0]):
+            with g.USBWire(core, util, state_queries=2, fdt=True, fdt_down=True) as wire:
+                wire.arm_fdt(); wire.send(g.fdt_manual_frame())
+                wire.arm_fdt_down(); wire.send(g.fdt_down_frame())
+                dev.read = timeout
+                self.assertIsNone(wire.receive_event(15))
+                self.assertTrue(all(t <= 2000 for t in seen))
+                self.assertLessEqual(sum(seen), 15000+2)
+                self.assertIsNone(wire.window_end)
+
+    def test_receive_event_returns_frame_and_rejects_partial(self):
+        dev, core, util = usb_fakes()
+        event = reply(0x32, bytes(24))
+        with g.USBWire(core, util, state_queries=2, fdt=True, fdt_down=True) as wire:
+            wire.arm_fdt(); wire.send(g.fdt_manual_frame())
+            wire.arm_fdt_down(); wire.send(g.fdt_down_frame())
+            dev.reads = [event + bytes(64-len(event))]
+            self.assertEqual(wire.receive_event(15), event)
+            def partial(ep, size, timeout):
+                dev.read = boom; return event[:10]
+            def boom(*a, **k): raise core.USBTimeoutError()
+            dev.read = partial
+            with self.assertRaisesRegex(g.ProbeError, 'partial_fdt_down_frame'):
+                wire.receive_event(15)
+
+    def test_sleep_frame_allowed_once_only_after_fdt_down(self):
+        cmd, body = g.unpack_command(g.unpack_frame(g.sleep_frame())[1])
+        self.assertEqual((cmd, body), (0x60, b'\x01\x00'))
+        dev, core, util = usb_fakes()
+        with g.USBWire(core, util, state_queries=2, fdt=True, fdt_down=True) as wire:
+            with self.assertRaises(g.ProbeError):
+                wire.arm_sleep()
+            with self.assertRaisesRegex(g.ProbeError, 'sleep_not_armed'):
+                wire.send(g.sleep_frame())
+            wire.arm_fdt(); wire.send(g.fdt_manual_frame())
+            wire.arm_fdt_down(); wire.send(g.fdt_down_frame())
+            with self.assertRaisesRegex(g.ProbeError, 'sleep_not_armed'):
+                wire.send(g.sleep_frame())
+            wire.arm_sleep(); wire.send(g.sleep_frame())
+            with self.assertRaises(g.ProbeError):
+                wire.arm_sleep()
+            with self.assertRaises(g.ProbeError):
+                wire.send(g.sleep_frame())
+            with self.assertRaises(g.ProbeError):
+                wire.send(reply(0x60, b'\x00\x00'))
+            self.assertEqual(len(dev.written), 3)
+        dev, core, util = usb_fakes()
+        with g.USBWire(core, util) as wire:
+            with self.assertRaises(g.ProbeError):
+                wire.send(g.sleep_frame())
+            self.assertEqual(dev.written, [])
+
+    def test_event_in_same_transfer_as_ack_is_returned_without_reading(self):
+        dev, core, util = usb_fakes()
+        ack, event = reply(0xb0, b'\x32\x01'), reply(0x32, bytes(24))
+        with g.USBWire(core, util, state_queries=2, fdt=True, fdt_down=True) as wire:
+            wire.arm_fdt(); wire.send(g.fdt_manual_frame())
+            wire.arm_fdt_down(); wire.send(g.fdt_down_frame())
+            dev.reads = [ack + event]
+            g.expect_ack(wire, 0x32)
+            def no_read(*a, **k): raise AssertionError('should not read USB')
+            dev.read = no_read
+            self.assertEqual(wire.receive_event(15), event)
+
+    def test_cli_fdt_down_rules_and_wiring(self):
+        from unittest.mock import patch
+        import contextlib, io, json
+        cases = ((['--run', '--query-state', '--fdt-down'], None, 'fdt_down_requires_fdt_manual'),
+                 (['--run', '--fdt-down'], None, 'fdt_down_requires_fdt_manual'),
+                 (['--run', '--query-state', '--fdt-manual'], (False, False), None),
+                 (['--run', '--query-state', '--fdt-manual', '--fdt-down'], (True, True), None))
+        for argv, expected, error in cases:
+            seen = {}
+            output = io.StringIO()
+            wire = unittest.mock.MagicMock()
+            wire.__enter__.return_value = wire; wire.cleanup_confirmed = True
+            def fake_usb(*a, **k): seen['down_wire'] = k.get('fdt_down', False); return wire
+            def fake_handshake(w, s, r, pre_tls_query=False):
+                r['stage'] = 'complete'; return r
+            def fake_down(*a): seen['down_called'] = True
+            with patch('sys.stdin.isatty', return_value=True), patch('os.geteuid', return_value=0), \
+                 patch.object(g, 'load_key', return_value=bytes(32)), patch.object(g, 'USBWire', side_effect=fake_usb), \
+                 patch.object(g, 'handshake', side_effect=fake_handshake), \
+                 patch.object(g, 'query_state', side_effect=lambda *a: None), \
+                 patch.object(g, 'fdt_manual', side_effect=lambda *a: None), \
+                 patch.object(g, 'fdt_down', side_effect=fake_down), \
+                 patch('resource.setrlimit'), contextlib.redirect_stdout(output):
+                g.main(argv)
+            result = json.loads(output.getvalue())
+            if error:
+                self.assertEqual(result['error'], error); self.assertEqual(seen, {})
+            else:
+                self.assertNotIn('error', result)
+                self.assertEqual((seen['down_wire'], seen.get('down_called', False)), expected)
+
+
 class NopTimeoutTests(unittest.TestCase):
     def test_only_clean_read_timeout_is_tolerated(self):
         dev, core, util = usb_fakes()
@@ -739,3 +1063,252 @@ class CLITests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main(verbosity=2)
+
+
+class StaleFrameTests(unittest.TestCase):
+    """A reader left armed by an earlier run is detected before any send."""
+    def test_clean_reader_listens_first_then_handshakes(self):
+        wire = SyntheticReader(state='plain2')
+        report = g.handshake(wire, g.TLSServer(bytes(range(32))), {})
+        self.assertEqual(wire.stale_windows, [g.STALE_WINDOW])
+        self.assertEqual(report['stage'], 'complete')
+
+    def test_stale_event_stops_before_any_command_shape_only(self):
+        import struct
+        stale = reply(0x32, struct.pack('<HH', 2, 0x3ff) + SECRET_FDT_BASE)
+        wire = SyntheticReader(stale=stale)
+        report = {}
+        with self.assertRaisesRegex(g.ProbeError, 'stale_reader_frame'):
+            g.handshake(wire, g.TLSServer(bytes(range(32))), report)
+        self.assertEqual(wire.commands, [])
+        self.assertEqual((report['stage'], report['stale_frame_flag'], report['stale_frame_cmd'],
+                          report['stale_frame_length']), ('stale_check', 'a0', '32', 24))
+        self.assertNotIn(SECRET_FDT_BASE.hex()[:8], repr(report))
+
+    def test_wrong_firmware_reply_is_summarised(self):
+        wire = SyntheticReader(bad='firmware')
+        report = {}
+        with self.assertRaisesRegex(g.ProbeError, 'unexpected_firmware'):
+            g.handshake(wire, g.TLSServer(bytes(range(32))), report)
+        self.assertEqual((report['firmware_reply_cmd'], report['firmware_reply_length']), ('a8', 10))
+        self.assertNotIn('UNEXPECTED', repr(report))
+
+    def test_usb_stale_check_only_before_first_send(self):
+        from unittest.mock import patch
+        dev, core, util = usb_fakes()
+        clock = [1000.0]
+        def timeout(ep, size, timeout):
+            clock[0] += timeout/1000; raise core.USBTimeoutError()
+        with patch('time.monotonic', side_effect=lambda: clock[0]):
+            with g.USBWire(core, util) as wire:
+                dev.read = timeout
+                self.assertIsNone(wire.receive_stale(g.STALE_WINDOW))
+                self.assertLess(clock[0]-1000, 1)
+                wire.send(g.command_frame(0))
+                with self.assertRaisesRegex(g.ProbeError, 'stale_check_after_send'):
+                    wire.receive_stale(g.STALE_WINDOW)
+        dev, core, util = usb_fakes()
+        event = reply(0x32, bytes(24))
+        with g.USBWire(core, util) as wire:
+            dev.reads = [event]
+            self.assertEqual(wire.receive_stale(0.5), event)
+
+
+class FDTUpTests(unittest.TestCase):
+    """Experiment 0012: after a 0011 finger-down event, one fixed 3.2 and one wait."""
+    def run_up(self, down='ok', up='ok'):
+        wire = SyntheticReader(state='plain2', fdt='ok', down=down, up=up)
+        server = g.TLSServer(bytes(range(32)))
+        report = g.handshake(wire, server, {})
+        g.query_state(wire, server, report)
+        g.fdt_manual(wire, server, report)
+        return wire, server, report
+
+    def test_fixed_fdt_up_frame_matches_windows_log(self):
+        cmd, body = g.unpack_command(g.unpack_frame(g.fdt_up_frame())[1])
+        self.assertEqual((cmd, body.hex()), (0x34, '0e0180a08093809b80948090808f8094808b808a8083'))
+        self.assertEqual(len(body), 0x16)
+        self.assertEqual(g.FDT_UP_WINDOW, 15.0)
+
+    def test_up_event_reports_words_and_base_length_only(self):
+        wire, server, report = self.run_up()
+        notes = []
+        g.fdt_down(wire, server, report, notify=notes.append, up=True)
+        self.assertEqual(wire.commands, [0, 0xa8, 0xd0, 0xd4, 0xae, 0x36, 0xae, 0x32, 0x34, 0x60])
+        self.assertEqual(wire.event_windows, [15.0, 15.0])
+        self.assertEqual(notes, ['armed: touch the sensor now (waiting 15 s)',
+                                 'finger down: lift it now (waiting 15 s)'])
+        self.assertEqual(report['stage'], 'complete')
+        self.assertTrue(report['fdt_down_event'] and report['fdt_up_ack'] and report['fdt_up_event'] and report['sleep_ack'])
+        self.assertEqual((report['fdt_up_irq_status'], report['fdt_up_touch_flag'], report['fdt_up_touch_zones']),
+                         ('0004', '0000', 0))
+        self.assertEqual((report['fdt_up_reply_flag'], report['fdt_up_reply_cmd'], report['fdt_up_reply_length'],
+                          report['fdt_up_base_length']), ('a0', '34', 24, 20))
+        self.assertEqual(report['fdt_up_wait_ms'] % 100, 0)
+        self.assertNotIn(SECRET_FDT_BASE.hex()[:8], repr(report))
+
+    def test_up_timeout_is_a_result_and_disarms(self):
+        wire, server, report = self.run_up(up='timeout')
+        g.fdt_down(wire, server, report, notify=lambda t: None, up=True)
+        self.assertEqual((report['stage'], report['fdt_up_event'], report['sleep_ack']), ('complete', False, True))
+        self.assertEqual(wire.commands[-3:], [0x32, 0x34, 0x60])
+        self.assertNotIn('fdt_up_touch_flag', report)
+
+    def test_no_down_event_never_sends_fdt_up(self):
+        wire, server, report = self.run_up(down='timeout')
+        g.fdt_down(wire, server, report, notify=lambda t: None, up=True)
+        self.assertNotIn(0x34, wire.commands)
+        self.assertEqual(wire.commands[-2:], [0x32, 0x60])
+        self.assertEqual(wire.event_windows, [15.0])
+        self.assertTrue(report['fdt_up_skipped'] and report['sleep_ack'])
+        self.assertNotIn('fdt_up_ack', report)
+
+    def test_bad_down_event_never_sends_fdt_up(self):
+        wire, server, report = self.run_up(down='wrong_cmd')
+        with self.assertRaisesRegex(g.ProbeError, 'unexpected_fdt_down_reply_command'):
+            g.fdt_down(wire, server, report, notify=lambda t: None, up=True)
+        self.assertNotIn(0x34, wire.commands)
+        self.assertEqual(wire.commands.count(0x60), 1)
+
+    def test_without_up_flag_0011_is_unchanged(self):
+        wire, server, report = self.run_up()
+        g.fdt_down(wire, server, report, notify=lambda t: None)
+        self.assertNotIn(0x34, wire.commands)
+        self.assertNotIn('fdt_up_skipped', report)
+
+    def test_up_failures_stop_with_fixed_labels_and_disarm_once(self):
+        for up, label in (('no_ack', 'invalid_command_ack'), ('wrong_cmd', 'unexpected_fdt_up_reply_command'),
+                          ('short', 'unexpected_fdt_up_reply_length'), ('flag_b0', 'unexpected_fdt_up_reply_flag')):
+            wire, server, report = self.run_up(up=up)
+            with self.assertRaisesRegex(g.ProbeError, label):
+                g.fdt_down(wire, server, report, notify=lambda t: None, up=True)
+            self.assertEqual(report['stage'], 'fdt_up')
+            self.assertEqual(wire.commands[-3:], [0x32, 0x34, 0x60])
+            self.assertEqual(wire.commands.count(0x60), 1)
+            self.assertTrue(report['sleep_ack'])
+            self.assertNotIn(SECRET_FDT_BASE.hex()[:8], repr(report))
+        wire, server, report = self.run_up(up='no_ack')
+        with self.assertRaises(g.ProbeError):
+            g.fdt_down(wire, server, report, notify=lambda t: None, up=True)
+        self.assertEqual(wire.event_windows, [15.0])  # no up wait without an ACK
+
+    def test_interrupt_during_up_wait_disarms_once(self):
+        wire, server, report = self.run_up(up='timeout')
+        real = wire.receive_event
+        def interrupted(seconds):
+            if 0x34 in wire.commands: raise KeyboardInterrupt
+            return real(seconds)
+        wire.receive_event = interrupted
+        with self.assertRaises(KeyboardInterrupt):
+            g.fdt_down(wire, server, report, notify=lambda t: None, up=True)
+        self.assertEqual(wire.commands[-3:], [0x32, 0x34, 0x60])
+        self.assertEqual((report['stage'], report['sleep_ack']), ('fdt_up', True))
+
+    def test_late_up_event_counted_only_after_fdt_up(self):
+        wire, server, report = self.run_up(up='timeout')
+        wire.sleep = 'late_up'
+        wire.fdt_up_sent = True  # the synthetic wire mirrors USBWire's flag
+        g.fdt_down(wire, server, report, notify=lambda t: None, up=True)
+        self.assertEqual((report['fdt_up_late_events'], report['sleep_ack']), (1, True))
+        self.assertNotIn(SECRET_FDT_BASE.hex()[:8], repr(report))
+        wire, server, report = self.run_up(down='timeout')
+        wire.sleep = 'late_up'
+        with self.assertRaisesRegex(g.ProbeError, 'invalid_command_ack'):
+            g.fdt_down(wire, server, report, notify=lambda t: None, up=True)
+        self.assertNotIn('fdt_up_late_events', report)
+
+    def test_usb_boundary_allows_fdt_up_once_between_down_and_sleep(self):
+        dev, core, util = usb_fakes()
+        with self.assertRaisesRegex(g.ProbeError, 'fdt_up_requires_fdt_down'):
+            g.USBWire(core, util, state_queries=2, fdt=True, fdt_up=True)
+        with g.USBWire(core, util, state_queries=2, fdt=True, fdt_down=True) as wire:
+            wire.arm_fdt(); wire.send(g.fdt_manual_frame())
+            wire.arm_fdt_down(); wire.send(g.fdt_down_frame())
+            with self.assertRaises(g.ProbeError):
+                wire.arm_fdt_up()  # not enabled
+            with self.assertRaisesRegex(g.ProbeError, 'fdt_up_not_armed'):
+                wire.send(g.fdt_up_frame())
+        dev, core, util = usb_fakes()
+        with g.USBWire(core, util, state_queries=2, fdt=True, fdt_down=True, fdt_up=True) as wire:
+            wire.arm_fdt(); wire.send(g.fdt_manual_frame())
+            with self.assertRaises(g.ProbeError):
+                wire.arm_fdt_up()  # 3.1 not sent
+            wire.arm_fdt_down(); wire.send(g.fdt_down_frame())
+            with self.assertRaisesRegex(g.ProbeError, 'fdt_up_not_armed'):
+                wire.send(g.fdt_up_frame())
+            wire.arm_fdt_up(); wire.send(g.fdt_up_frame())
+            with self.assertRaises(g.ProbeError):
+                wire.arm_fdt_up()
+            with self.assertRaises(g.ProbeError):
+                wire.send(g.fdt_up_frame())
+            first = bytes.fromhex('0e0180a3809780a08097809580938097809480' + '8f808e')  # first Windows 3.2
+            with self.assertRaises(g.ProbeError):
+                wire.send(reply(0x34, first))
+            wire.arm_sleep(); wire.send(g.sleep_frame())
+            with self.assertRaises(g.ProbeError):
+                wire.receive_event(1)  # no wait after 6.0
+            self.assertEqual([w[4] for w in dev.written], [0x36, 0x32, 0x34, 0x60])
+        dev, core, util = usb_fakes()
+        with g.USBWire(core, util, state_queries=2, fdt=True, fdt_down=True, fdt_up=True) as wire:
+            wire.arm_fdt(); wire.send(g.fdt_manual_frame())
+            wire.arm_fdt_down(); wire.send(g.fdt_down_frame())
+            wire.arm_sleep(); wire.send(g.sleep_frame())
+            with self.assertRaises(g.ProbeError):
+                wire.arm_fdt_up()  # never after 6.0
+
+    def test_usb_partial_up_event_is_labelled_and_disarms(self):
+        dev, core, util = usb_fakes()
+        down_ack, down = reply(0xb0, b'\x32\x01'), reply(0x32, bytes(24))
+        up_ack, up = reply(0xb0, b'\x34\x01'), reply(0x34, bytes(24))
+        sleep_ack = reply(0xb0, b'\x60\x01')
+        with g.USBWire(core, util, state_queries=2, fdt=True, fdt_down=True, fdt_up=True) as wire:
+            wire.arm_fdt(); wire.send(g.fdt_manual_frame())
+            reads = [down_ack, down, up_ack, up[:10]]
+            def read(ep, size, timeout):
+                if dev.written[-1][4] == 0x60: return sleep_ack
+                if reads: return reads.pop(0)
+                raise core.USBTimeoutError()
+            dev.read = read
+            report = {'stage': 'complete', 'fdt_ack': True, 'state_fdt_query_ack': True}
+            with self.assertRaisesRegex(g.ProbeError, 'partial_fdt_up_frame'):
+                g.fdt_down(wire, type('S', (), {'complete': True})(), report, notify=lambda t: None, up=True)
+            self.assertEqual([w[4] for w in dev.written], [0x36, 0x32, 0x34, 0x60])
+            self.assertTrue(report['sleep_ack'] and report['fdt_down_event'])
+
+    def test_deadline_covers_two_windows(self):
+        import time
+        dev, core, util = usb_fakes()
+        with g.USBWire(core, util, state_queries=2, fdt=True, fdt_down=True, fdt_up=True) as wire:
+            self.assertAlmostEqual(wire.deadline-time.monotonic(), 90, delta=1)
+
+    def test_cli_fdt_up_rules_and_wiring(self):
+        from unittest.mock import patch
+        import contextlib, io, json
+        cases = ((['--run', '--query-state', '--fdt-manual', '--fdt-up'], None, 'fdt_up_requires_fdt_down'),
+                 (['--run', '--query-state', '--fdt-manual', '--fdt-down'], (True, False, False), None),
+                 (['--run', '--query-state', '--fdt-manual', '--fdt-down', '--fdt-up'], (True, True, True), None))
+        for argv, expected, error in cases:
+            seen = {}
+            output = io.StringIO()
+            wire = unittest.mock.MagicMock()
+            wire.__enter__.return_value = wire; wire.cleanup_confirmed = True
+            def fake_usb(*a, **k):
+                seen['wire'] = (k.get('fdt_down', False), k.get('fdt_up', False)); return wire
+            def fake_handshake(w, s, r, pre_tls_query=False):
+                r['stage'] = 'complete'; return r
+            def fake_down(*a, up=False): seen['up'] = up
+            with patch('sys.stdin.isatty', return_value=True), patch('os.geteuid', return_value=0), \
+                 patch.object(g, 'load_key', return_value=bytes(32)), patch.object(g, 'USBWire', side_effect=fake_usb), \
+                 patch.object(g, 'handshake', side_effect=fake_handshake), \
+                 patch.object(g, 'query_state', side_effect=lambda *a: None), \
+                 patch.object(g, 'fdt_manual', side_effect=lambda *a: None), \
+                 patch.object(g, 'fdt_down', side_effect=fake_down), \
+                 patch('resource.setrlimit'), contextlib.redirect_stdout(output):
+                g.main(argv)
+            report = json.loads(output.getvalue())
+            if error:
+                self.assertEqual(report['error'], error)
+                self.assertNotIn('wire', seen)
+            else:
+                self.assertNotIn('error', report)
+                self.assertEqual(seen['wire'] + (seen['up'],), expected)
