@@ -8,13 +8,17 @@ Commands allowed: fixed NOP, firmware query, D0 TLS request, D4 confirmation,
 and (only with --query-state, once, after D4) a fixed A7 QueryMcuState(0x55).
 With --query-state-pre-tls (experiment 0008) the same fixed A7 is also sent
 once between the firmware query and D0; the USB boundary then allows two.
-No images, outbound TLS application data, key reads/writes, firmware or reset
+No images (except --image, shape only), outbound TLS application data, key reads/writes, firmware or reset
 commands. State-query replies are summarised by flag, command and length; a 2-byte
 plaintext reply is also printed and decoded as MCU state flags (experiment 0007).
 With --fdt-manual (experiment 0010, needs --query-state) one fixed 3.3
 McuSwitchToFdtMode "manual" frame (Lambertz's 55a2 payload) is sent after the
 post-TLS A7, then A7 once more. Only its IRQ status and touch flag are printed;
 the 20 FDT base bytes are recorded by length only.
+With --image (experiment 0013, needs --query-state) one fixed 2.0
+McuGetImage (01 00) follows the post-TLS A7, with no finger on the sensor.
+The TLS image reply is decrypted in memory, measured and zeroed; only
+lengths and booleans are reported, never pixel data or statistics.
 With --fdt-up (experiment 0012, needs --fdt-down), and only after a valid
 finger-down event, one fixed 3.2 McuSwitchToFdtUp follows and one more wait
 of up to 15 s for the finger-up event, still before the single 6.0.
@@ -48,6 +52,13 @@ FDT_UP_WINDOW = 15.0
 SLEEP_MODE = 0x60
 # goodix-fp-dump goodix.py mcu_switch_to_sleep_mode(); Windows unlock ends with 6.0.
 SLEEP_PAYLOAD = b'\x01\x00'
+GET_IMAGE = 0x20
+# tlambertz capture.py getImage() (55a2) and Windows log 2_wbdi_singleunlock.log
+# line 392-491: McuGetImage, payload 01 00, outDataSize 0x2.
+GET_IMAGE_PAYLOAD = b'\x01\x00'
+# Windows log: 'tls decrypted (14788 bytes)'; 56 x 176 12-bit pixels + 4.
+IMAGE_PLAIN_LEN = 14788
+IMAGE_WINDOW = 5.0
 STALE_WINDOW = 0.5
 
 class ProbeError(Exception):
@@ -91,6 +102,12 @@ def fdt_down_frame():
 def fdt_up_frame():
     """The single fixed 3.2 McuSwitchToFdtUp frame (experiment 0012)."""
     body = struct.pack('<BH', FDT_UP, len(FDT_UP_PAYLOAD)+1) + FDT_UP_PAYLOAD
+    return frame(0xa0, body + bytes([(0xaa-sum(body)) & 255]))
+
+
+def image_frame():
+    """The single fixed 2.0 McuGetImage frame (experiment 0013)."""
+    body = struct.pack('<BH', GET_IMAGE, len(GET_IMAGE_PAYLOAD)+1) + GET_IMAGE_PAYLOAD
     return frame(0xa0, body + bytes([(0xaa-sum(body)) & 255]))
 
 
@@ -198,6 +215,55 @@ class TLSServer:
             except ssl.SSLError:
                 return None
         return None
+
+    def image_shape(self, payload, report):
+        """Experiment 0013: decrypt an image reply; record its shape only.
+
+        Plaintext is read into one preallocated bytearray, measured, and
+        zeroed. It is never returned, hashed, printed or summarised. Python
+        and OpenSSL may keep internal copies (best effort only).
+        """
+        import ssl
+        for skip in (9, 0):
+            record = payload[skip:]
+            if len(record) >= 5 and record[0] == 21 and record[1:3] == b'\x03\x03':
+                raise ProbeError('tls_alert_in_image_reply')
+            if len(record) < 5 or record[0] != 23 or record[1:3] != b'\x03\x03':
+                continue
+            report.update(image_prefix_len=skip, image_record_len=len(record))
+            self.incoming.write(record)
+            buf = bytearray(MAX_FRAME+1)
+            total = 0
+            try:
+                for _ in range(8):
+                    if total >= len(buf):
+                        raise ProbeError('image_plaintext_too_long')
+                    view = memoryview(buf)[total:]
+                    try:
+                        n = self.connection.read(len(view), view)
+                    except ssl.SSLWantReadError:
+                        break
+                    except ssl.SSLError:
+                        report['image_decrypted'] = False
+                        raise ProbeError('image_not_decrypted') from None
+                    finally:
+                        view.release()
+                    if not n:
+                        break
+                    total += n
+            finally:
+                buf[:] = bytes(len(buf))
+                del buf
+            # A cut-off record stays in OpenSSL's buffer and yields nothing, so
+            # it fails as image_not_decrypted below; trailing bytes are fatal.
+            if self.incoming.pending or self.connection.pending():
+                raise ProbeError('image_trailing_data')
+            report.update(image_decrypted=total > 0, image_plain_len=total,
+                          image_len_expected=total == IMAGE_PLAIN_LEN)
+            if not total:
+                raise ProbeError('image_not_decrypted')
+            return
+        raise ProbeError('image_reply_not_tls_record')
 
 
 def tls_reason(exc):
@@ -560,6 +626,42 @@ def disarm(wire, report):
     raise ProbeError('sleep_ack_missing')
 
 
+def get_image(wire, server, report):
+    """Experiment 0013: one fixed 2.0 after the post-TLS A.7, no finger.
+
+    Expects an ACK, then one 0xb2 frame whose TLS record decrypts to the
+    image (Windows log: 14,788 bytes). Only lengths and booleans are
+    reported. No 6.0 follows: 2.0 does not arm FDT.
+    """
+    if report.get('stage') != 'complete' or not server.complete or not report.get('state_query_ack'):
+        raise ProbeError('image_before_state_query')
+    report.update(stage='image', image_ack=False)
+    wire.arm_image()
+    wire.send(image_frame())
+    expect_ack(wire, GET_IMAGE)
+    report['image_ack'] = True
+    raw = wire.receive_image(IMAGE_WINDOW)
+    if raw is None:
+        raise ProbeError('image_timeout')
+    flag, payload = unpack_frame(raw, (0xa0, 0xb0, TLS_DATA))
+    del raw
+    report.update(image_frame_flag='%02x' % flag, image_frame_len=len(payload))
+    if flag == 0xa0:
+        cmd, body = unpack_command(payload)
+        report.update(image_reply_cmd='%02x' % cmd, image_frame_len=len(body))
+        del body, payload
+        raise ProbeError('image_reply_plaintext')
+    if flag != TLS_DATA:
+        del payload
+        raise ProbeError('unexpected_image_reply_flag')
+    try:
+        server.image_shape(payload, report)
+    finally:
+        del payload
+    report['stage'] = 'complete'
+    return report
+
+
 def load_key(directory='/root/goodix-psk'):
     import os, stat
     directory_fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
@@ -582,7 +684,10 @@ def load_key(directory='/root/goodix-psk'):
 
 class USBWire:
     """One claimed interface, fixed endpoints, no detach/reset/configuration."""
-    def __init__(self, core=None, util=None, state_queries=1, fdt=False, fdt_down=False, fdt_up=False):
+    def __init__(self, core=None, util=None, state_queries=1, fdt=False, fdt_down=False, fdt_up=False, image=False):
+        if image is True and (fdt is True or state_queries != 1):
+            raise ProbeError('image_excludes_other_modes')
+        self.image_allowed = image is True; self.image_armed = False; self.image_sent = False
         if state_queries not in (1, 2):
             raise ProbeError('state_query_limit_not_allowed')
         if fdt_down is True and fdt is not True:
@@ -624,6 +729,11 @@ class USBWire:
         if not self.fdt_up_allowed or not self.fdt_down_sent or self.fdt_up_sent or self.sleep_sent:
             raise ProbeError('fdt_up_not_allowed')
         self.fdt_up_armed = True
+
+    def arm_image(self):
+        if not self.image_allowed or self.image_sent or self.state_queries_sent != 1:
+            raise ProbeError('image_not_allowed')
+        self.image_armed = True
 
     def arm_sleep(self):
         if not self.fdt_down_sent or self.sleep_sent:
@@ -700,6 +810,12 @@ class USBWire:
                     raise ProbeError('fdt_up_not_armed')
                 self.fdt_up_armed = False
                 self.fdt_up_sent = True
+            elif raw == image_frame():
+                if (not self.image_allowed or not self.image_armed or self.image_sent
+                        or self.state_queries_sent != 1):
+                    raise ProbeError('image_not_armed')
+                self.image_armed = False
+                self.image_sent = True
             elif raw == sleep_frame():
                 if not self.sleep_armed or self.sleep_sent or not self.fdt_down_sent:
                     raise ProbeError('sleep_not_armed')
@@ -762,6 +878,12 @@ class USBWire:
         label = 'partial_fdt_up_frame' if self.fdt_up_sent else 'partial_fdt_down_frame'
         return self.receive_window(seconds, label)
 
+    def receive_image(self, seconds):
+        """Only after the 2.0 ACK: one frame, or None on a clean timeout."""
+        if not self.image_sent:
+            raise ProbeError('image_not_sent')
+        return self.receive_window(seconds, 'partial_image_frame')
+
     def receive_stale(self, seconds):
         """Before the first send only: any frame here was not asked for."""
         if self.sent_any:
@@ -773,7 +895,7 @@ class USBWire:
         timeout_error = getattr(self.core, 'USBTimeoutError', None)
         end = time.monotonic()+seconds
         if end >= self.deadline:
-            raise ProbeError('fdt_down_window_exceeds_deadline')
+            raise ProbeError('wait_window_exceeds_deadline')
         self.window_end = end
         try:
             while True:
@@ -799,6 +921,7 @@ def main(argv=None):
     parser.add_argument('--fdt-manual', action='store_true', help='experiment 0010: after the post-TLS A.7, send one fixed 3.3 manual FDT, then A.7 again (needs --query-state; not with --query-state-pre-tls)')
     parser.add_argument('--fdt-down', action='store_true', help='experiment 0011: after --fdt-manual, send one fixed 3.1 FDT down, wait up to 15 s for one finger-down event, then one fixed 6.0 sleep (needs --fdt-manual)')
     parser.add_argument('--fdt-up', action='store_true', help='experiment 0012: after a finger-down event, send one fixed 3.2 FDT up and wait up to 15 s for one finger-up event, before the 6.0 (needs --fdt-down)')
+    parser.add_argument('--image', action='store_true', help='experiment 0013: after the post-TLS A.7, send one fixed 2.0 McuGetImage (no finger) and report the reply shape only (needs --query-state; no FDT or pre-TLS flags)')
     args = parser.parse_args(argv)
     report = dict(stage='preflight', tls_verified=False, device_confirmation_ack=False, usb_released=False)
     wire = report_server = None
@@ -815,6 +938,10 @@ def main(argv=None):
             raise ProbeError('fdt_down_requires_fdt_manual')
         if args.fdt_up and not args.fdt_down:
             raise ProbeError('fdt_up_requires_fdt_down')
+        if args.image and not args.query_state:
+            raise ProbeError('image_requires_query_state')
+        if args.image and (args.fdt_manual or args.query_state_pre_tls):
+            raise ProbeError('image_excludes_other_modes')
         if not sys.stdin.isatty() or os.geteuid() != 0 or not sys.platform.startswith('linux'):
             raise ProbeError('interactive_root_terminal_required')
         # No dumps or keylog file. Python cannot guarantee erasure of every heap copy.
@@ -831,6 +958,8 @@ def main(argv=None):
             wire = USBWire(state_queries=2, fdt=True, fdt_down=args.fdt_down, fdt_up=args.fdt_up)
         elif args.query_state_pre_tls:
             wire = USBWire(state_queries=2)
+        elif args.image:
+            wire = USBWire(image=True)
         else:
             wire = USBWire()
         with wire:
@@ -842,6 +971,8 @@ def main(argv=None):
                 query_state(wire, server, report)
             if args.fdt_manual:
                 fdt_manual(wire, server, report)
+            if args.image:
+                get_image(wire, server, report)
             if args.fdt_up:
                 fdt_down(wire, server, report, up=True)
             elif args.fdt_down:
