@@ -1,7 +1,7 @@
 # Experiment 0012 plan: wait for one finger-up (FDT up) event
 
-Status: **approved by the operator; implemented, awaiting independent
-review and the two runs.**
+Status: **done.** Reviewed (PASS); both runs passed. See
+[`0012-fdt-up-event-result.md`](0012-fdt-up-event-result.md).
 
 ## Why
 
