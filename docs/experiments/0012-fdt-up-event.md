@@ -49,8 +49,9 @@ frame with a 24-byte body, summarise it like the `0x32` event, then the same
 single `6.0` disarm on every path. On a `3.1` timeout, skip `3.2` and disarm
 as in 0011.
 
-- USB boundary: `3.2` allowed once, only after a received `0x32` event, only
-  with the fixed payload; `6.0` still once, now also after `3.2`.
+- USB boundary: `3.2` allowed once, only after `3.1` and before `6.0`, only
+  with the fixed payload; `6.0` still once, now also after `3.2`. The tool
+  sends `3.2` only after a valid `0x32` event (checked in `fdt_down_wait`).
 - Operator: touch at the prompt, keep the finger down until the second
   prompt ("lift now"), then lift.
 - Not sent: `9.0`, reset, idle, image request, key, firmware, second `3.1`.
