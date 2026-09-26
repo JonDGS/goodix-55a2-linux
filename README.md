@@ -34,8 +34,12 @@ An open, privacy-conscious research effort to support the Goodix USB fingerprint
   TLS-protected reply that decrypted to 14,788 bytes (56 × 176 12-bit pixels
   plus a trailer), without a chip-config upload. Only its shape was recorded
   ([experiment 0013](docs/experiments/0013-image-request-no-finger-result.md)).
-- Not yet done: decoding or checking image content, capture with a finger,
-  enrollment or matching. There is no usable Linux driver.
+- **A fingerprint image has been captured from Linux.** One image request
+  right after a finger-down event produced a 176 × 56 image showing ridge
+  lines, without a chip-config upload. Images stay on the test laptop and
+  are not published ([experiment 0014](docs/experiments/0014-image-with-finger-result.md)).
+- Not yet done: background calibration, image quality, enrollment or
+  matching. There is no usable Linux driver.
 
 ## Windows capture helper
 
@@ -112,6 +116,8 @@ Related but differently identified Goodix sensors may use substantially differen
   - [`docs/experiments/0012-fdt-up-event-result.md`](docs/experiments/0012-fdt-up-event-result.md) — finger-up event received on lift.
   - [`docs/experiments/0013-image-request-no-finger.md`](docs/experiments/0013-image-request-no-finger.md) — plan: one `2.0` image request, no finger, shape-only report.
   - [`docs/experiments/0013-image-request-no-finger-result.md`](docs/experiments/0013-image-request-no-finger-result.md) — reply decrypted to 14,788 bytes; image path works.
+  - [`docs/experiments/0014-image-with-finger.md`](docs/experiments/0014-image-with-finger.md) — plan: image after a finger-down event, saved locally.
+  - [`docs/experiments/0014-image-with-finger-result.md`](docs/experiments/0014-image-with-finger-result.md) — ridge pattern visible; no chip config needed.
   - [`docs/WINDOWS_CAPTURE_CLI.md`](docs/WINDOWS_CAPTURE_CLI.md) — experimental Windows capture helper guide.
 - [`tools/pcap_metadata.py`](tools/pcap_metadata.py) — local-only classic-PCAP metadata inspector; it never emits packet payload bytes.
 - [`tools/usbpcap_bulk_index.py`](tools/usbpcap_bulk_index.py) — local-only USBPcap bulk-header indexer; it skips transfer payloads entirely.

@@ -33,3 +33,8 @@ htmlcov/
 *.swp
 *~
 .DS_Store
+
+# Experiment 0014: locally saved sensor images (never commit)
+images/
+*.pgm
+*.raw
