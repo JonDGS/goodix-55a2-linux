@@ -1479,3 +1479,166 @@ class ImageBoundaryTests(unittest.TestCase):
             with contextlib.redirect_stdout(out):
                 g.main(argv)
             self.assertEqual(json.loads(out.getvalue())['error'], label)
+
+
+class SaveImageTests(unittest.TestCase):
+    """Experiment 0014: save .raw/.pgm beside the tool; coarse stats only."""
+    def setUp(self):
+        import tempfile
+        self.tmp = tempfile.TemporaryDirectory()
+        self.dir = pathlib.Path(self.tmp.name)/'images'
+        self._orig = g.image_directory
+        g.image_directory = lambda: str(self.dir)
+
+    def tearDown(self):
+        g.image_directory = self._orig
+        self.tmp.cleanup()
+
+    def assertNoPixels(self, report):
+        text = repr(report)
+        self.assertNotIn('PLANTED', text)
+        self.assertNotIn(b'PLANTED'.hex(), text)
+        for key in report:
+            self.assertFalse(isinstance(report[key], (list, bytes, bytearray)) and key.startswith('image_'), key)
+
+    def test_unpack_matches_lambertz_example(self):
+        self.assertEqual(g.unpack_pixels(bytes.fromhex('0123456789ab')), [0x123, 0x670, 0xb45, 0x89a])
+
+    def test_no_finger_saves_raw_and_pgm(self):
+        wire = SyntheticReader(state='plain2', image=None)
+        server = g.TLSServer(bytes(range(32)))
+        report = g.handshake(wire, server, {})
+        g.query_state(wire, server, report)
+        g.get_image(wire, server, report, 'nofinger')
+        self.assertTrue(report['image_saved'])
+        files = sorted(p.name for p in self.dir.iterdir())
+        self.assertEqual(files, [report['image_file']+'.pgm', report['image_file']+'.raw'])
+        self.assertTrue(report['image_file'].endswith('-nofinger'))
+        raw = (self.dir/(report['image_file']+'.raw')).read_bytes()
+        self.assertEqual(raw, SECRET_IMAGE)
+        pgm = (self.dir/(report['image_file']+'.pgm')).read_bytes()
+        self.assertTrue(pgm.startswith(b'P5\n176 56\n4095\n'))
+        self.assertEqual(len(pgm), len(b'P5\n176 56\n4095\n') + 2*9856)
+        self.assertEqual(report['image_pixel_count'], 9856)
+        pixels = g.unpack_pixels(SECRET_IMAGE[:-4])
+        self.assertEqual((report['image_min'], report['image_max']), (min(pixels), max(pixels)))
+        self.assertNoPixels(report)
+
+    def test_never_overwrites_and_cleans_partial(self):
+        import os
+        report = {}
+        self.dir.mkdir()
+        g.save_image(bytearray(SECRET_IMAGE), 'finger', report)
+        base = report['image_file']
+        # Same second, same name: must fail, not overwrite, and leave the first pair intact.
+        (self.dir/(base+'.raw')).unlink()
+        with self.assertRaisesRegex(g.ProbeError, 'image_save_failed'):
+            g.save_image(bytearray(SECRET_IMAGE), 'finger', {})
+        self.assertFalse((self.dir/(base+'.raw')).exists())  # partial .raw removed
+        self.assertTrue((self.dir/(base+'.pgm')).exists())
+
+    def test_bad_tag_or_length_refused(self):
+        for plain, tag in ((bytearray(SECRET_IMAGE), 'other'), (bytearray(10), 'finger')):
+            with self.assertRaisesRegex(g.ProbeError, 'image_save_arguments'):
+                g.save_image(plain, tag, {})
+        self.assertFalse(self.dir.exists())
+
+    def test_unexpected_length_not_saved(self):
+        wire = SyntheticReader(state='plain2', image='short')
+        server = g.TLSServer(bytes(range(32)))
+        report = g.handshake(wire, server, {})
+        g.query_state(wire, server, report)
+        g.get_image(wire, server, report, 'nofinger')
+        self.assertFalse(report['image_saved'])
+        self.assertEqual(report['image_save_skipped'], 'unexpected_length')
+        self.assertFalse(self.dir.exists())
+
+    def test_without_save_nothing_written(self):
+        wire = SyntheticReader(state='plain2', image=None)
+        server = g.TLSServer(bytes(range(32)))
+        report = g.handshake(wire, server, {})
+        g.query_state(wire, server, report)
+        g.get_image(wire, server, report)
+        self.assertNotIn('image_saved', report)
+        self.assertFalse(self.dir.exists())
+
+
+class ImageOnTouchTests(unittest.TestCase):
+    """Experiment 0014: one 2.0 right after the 0x32 down event, then 6.0."""
+    def setUp(self):
+        import tempfile
+        self.tmp = tempfile.TemporaryDirectory()
+        self._orig = g.image_directory
+        g.image_directory = lambda: str(pathlib.Path(self.tmp.name)/'images')
+
+    def tearDown(self):
+        g.image_directory = self._orig
+        self.tmp.cleanup()
+
+    def run_touch(self, down=None, image=None, save='finger'):
+        wire = SyntheticReader(state='plain2', fdt='ok', down=down or 'event', image=image)
+        wire.image_touch_allowed = True
+        server = g.TLSServer(bytes(range(32)))
+        report = g.handshake(wire, server, {})
+        g.query_state(wire, server, report)
+        g.fdt_manual(wire, server, report)
+        return wire, server, report
+
+    def test_image_after_down_event_then_sleep(self):
+        wire, server, report = self.run_touch()
+        g.fdt_down(wire, server, report, notify=lambda t: None, image_save='finger')
+        self.assertEqual(wire.commands[-3:], [0x32, 0x20, 0x60])
+        self.assertTrue(report['fdt_down_event'] and report['image_decrypted'] and report['image_saved'])
+        self.assertTrue(report['sleep_ack'])
+        self.assertTrue(report['image_file'].endswith('-finger'))
+        self.assertNotIn(0x34, wire.commands)
+        self.assertNotIn('PLANTED', repr(report))
+
+    def test_timeout_skips_image_and_disarms(self):
+        wire, server, report = self.run_touch(down='timeout')
+        g.fdt_down(wire, server, report, notify=lambda t: None, image_save='finger')
+        self.assertNotIn(0x20, wire.commands)
+        self.assertTrue(report['image_skipped'] and report['sleep_ack'])
+
+    def test_image_failure_still_disarms(self):
+        wire, server, report = self.run_touch(image='garbage_tls')
+        with self.assertRaisesRegex(g.ProbeError, 'image_not_decrypted'):
+            g.fdt_down(wire, server, report, notify=lambda t: None, image_save='finger')
+        self.assertEqual(wire.commands[-1], 0x60)
+        self.assertTrue(report['sleep_ack'])
+        self.assertEqual(report['stage'], 'image')
+
+
+class ImageOnTouchBoundaryTests(unittest.TestCase):
+    def make(self, **kw):
+        return g.USBWire(core=object(), util=object(), **kw)
+
+    def test_mode_rules(self):
+        for kw in (dict(image_touch=True), dict(fdt=True, image_touch=True),
+                   dict(fdt=True, fdt_down=True, fdt_up=True, image_touch=True),
+                   dict(fdt=True, fdt_down=True, image=True, image_touch=True)):
+            with self.assertRaises(g.ProbeError):
+                self.make(state_queries=2, **kw)
+
+    def test_image_only_between_down_and_sleep_once(self):
+        wire = self.make(state_queries=2, fdt=True, fdt_down=True, image_touch=True)
+        with self.assertRaisesRegex(g.ProbeError, 'image_not_allowed'):
+            wire.arm_image()
+        wire.fdt_down_sent = True
+        wire.arm_image()
+        wire.image_sent = True
+        with self.assertRaisesRegex(g.ProbeError, 'image_not_allowed'):
+            wire.arm_image()
+        wire.image_sent = False; wire.sleep_sent = True
+        with self.assertRaisesRegex(g.ProbeError, 'image_not_allowed'):
+            wire.arm_image()
+
+    def test_cli_rules(self):
+        import contextlib, io, json
+        for argv, label in ((['--run', '--query-state', '--fdt-manual', '--image-on-touch'], 'image_on_touch_mode_invalid'),
+                            (['--run', '--query-state', '--fdt-manual', '--fdt-down', '--fdt-up', '--image-on-touch'], 'image_on_touch_mode_invalid'),
+                            (['--run', '--query-state', '--save-image'], 'save_image_requires_image')):
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                g.main(argv)
+            self.assertEqual(json.loads(out.getvalue())['error'], label)
