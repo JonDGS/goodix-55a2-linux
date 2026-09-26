@@ -503,6 +503,7 @@ class FDTManualTests(unittest.TestCase):
 
 
 SECRET_STATE = bytes.fromhex('5a' * 13 + 'c3')
+SECRET_IMAGE = (b'PLANTED-IMAGE-MARKER' * 800)[:14788]
 SECRET_FDT_BASE = bytes.fromhex('c7e1' * 10)
 
 
@@ -514,8 +515,10 @@ def reply(cmd, payload):
 
 class SyntheticReader:
     """Real OpenSSL client behind a synthetic Goodix packet boundary."""
-    def __init__(self, bad=None, state=None, pre=None, fdt=None, down=None, stale=None, sleep=None, up=None):
+    def __init__(self, bad=None, state=None, pre=None, fdt=None, down=None, stale=None, sleep=None, up=None, image=None):
         import ssl
+        self.image = image  # 2.0 reply mode (experiment 0013)
+        self.image_windows = []
         self.up = up  # event mode after a 3.2 FDT up (experiment 0012)
         self.stale = stale  # frame left queued by an earlier run
         self.sleep = sleep  # 6.0 reply mode
@@ -567,6 +570,8 @@ class SyntheticReader:
         elif cmd == 0x34:
             if self.up == 'no_ack':
                 self.queue[-1] = reply(0xb0, b'\x34\x00')
+        elif cmd == 0x20:
+            self.image_reply()
         elif cmd == 0x60:
             if self.sleep == 'late_event':
                 self.queue.insert(len(self.queue)-1, reply(0x32, SECRET_FDT_BASE[:4] + SECRET_FDT_BASE))
@@ -574,6 +579,39 @@ class SyntheticReader:
                 self.queue.insert(len(self.queue)-1, reply(0x34, SECRET_FDT_BASE[:4] + SECRET_FDT_BASE))
             elif self.sleep == 'no_ack':
                 self.queue[-1] = reply(0xb0, b'\x60\x00')
+
+    def arm_image(self):
+        assert 0xae in self.commands and 0x20 not in self.commands
+
+    def image_reply(self):
+        import struct
+        mode = self.image
+        if mode == 'no_ack':
+            self.queue[-1] = reply(0xb0, b'\x20\x00'); return
+        if mode == 'timeout':
+            return
+        if mode == 'plain':
+            self.queue.append(reply(0x20, SECRET_IMAGE[:64])); return
+        if mode == 'flag_b0':
+            self.queue.append(g.frame(0xb0, b'\x16\x03\x03\x00\x01x')); return
+        if mode == 'alert':
+            body = b'\0' * 9 + b'\x15\x03\x03\x00\x02\x02\x28'
+        elif mode == 'garbage_tls':
+            body = b'\0' * 9 + b'\x17\x03\x03\x00\x20' + b'\x01' * 32
+        else:
+            data = SECRET_IMAGE if mode in (None, 0, 9) or isinstance(mode, tuple) else SECRET_IMAGE[:1000]
+            self.client.write(data)
+            body = b'\0' * (0 if mode == 0 else 9) + self.outgoing.read()
+            if isinstance(mode, tuple):
+                body = body[:-mode[1]]
+        head = struct.pack('<BH', 0xb2, len(body))
+        self.queue.append(head + bytes([sum(head) & 255]) + body)
+
+    def receive_image(self, seconds):
+        self.image_windows.append(seconds)
+        if not self.queue:
+            return None
+        return self.queue.pop(0)
 
     def receive_stale(self, seconds):
         assert not self.commands, 'stale check after a send'
@@ -1312,3 +1350,132 @@ class FDTUpTests(unittest.TestCase):
             else:
                 self.assertNotIn('error', report)
                 self.assertEqual(seen['wire'] + (seen['up'],), expected)
+
+
+class ImageTests(unittest.TestCase):
+    """Experiment 0013: one fixed 2.0 McuGetImage after the post-TLS A.7."""
+    def run_image(self, mode=None):
+        wire = SyntheticReader(state='plain2', image=mode)
+        server = g.TLSServer(bytes(range(32)))
+        report = g.handshake(wire, server, {})
+        g.query_state(wire, server, report)
+        return wire, server, report
+
+    def assertNoMarker(self, report):
+        text = repr(report)
+        self.assertNotIn('PLANTED', text)
+        self.assertNotIn(b'PLANTED-IMAGE'.hex(), text)
+
+    def test_fixed_image_frame(self):
+        cmd, body = g.unpack_command(g.unpack_frame(g.image_frame())[1])
+        self.assertEqual((cmd, body), (0x20, b'\x01\x00'))
+        self.assertEqual(g.image_frame().hex(), 'a00600a6200300010086')
+
+    def test_image_shape_only(self):
+        for mode, prefix in ((None, 9), (0, 0)):
+            wire, server, report = self.run_image(mode)
+            g.get_image(wire, server, report)
+            self.assertEqual(wire.commands, [0, 0xa8, 0xd0, 0xd4, 0xae, 0x20])
+            self.assertEqual(report['stage'], 'complete')
+            self.assertTrue(report['image_ack'] and report['image_decrypted'] and report['image_len_expected'])
+            self.assertEqual(report['image_plain_len'], 14788)
+            self.assertEqual(report['image_prefix_len'], prefix)
+            self.assertEqual(report['image_frame_flag'], 'b2')
+            self.assertEqual(wire.image_windows, [g.IMAGE_WINDOW])
+            self.assertNotIn(0x60, wire.commands)
+            self.assertNoMarker(report)
+
+    def test_unexpected_length_is_reported_not_fatal(self):
+        wire, server, report = self.run_image('short')
+        g.get_image(wire, server, report)
+        self.assertEqual(report['image_plain_len'], 1000)
+        self.assertFalse(report['image_len_expected'])
+        self.assertNoMarker(report)
+
+    def test_failures_stop_with_fixed_labels(self):
+        for mode, label in (('no_ack', 'invalid_command_ack'), ('timeout', 'image_timeout'),
+                            ('plain', 'image_reply_plaintext'), ('flag_b0', 'unexpected_image_reply_flag'),
+                            ('alert', 'tls_alert_in_image_reply'), ('garbage_tls', 'image_not_decrypted')):
+            wire, server, report = self.run_image(mode)
+            with self.assertRaisesRegex(g.ProbeError, label):
+                g.get_image(wire, server, report)
+            self.assertEqual(report['stage'], 'image')
+            self.assertNoMarker(report)
+
+    def test_image_requires_state_query(self):
+        wire = SyntheticReader(image=None)
+        server = g.TLSServer(bytes(range(32)))
+        report = g.handshake(wire, server, {})
+        with self.assertRaisesRegex(g.ProbeError, 'image_before_state_query'):
+            g.get_image(wire, server, report)
+        self.assertNotIn(0x20, wire.commands)
+
+    def test_cut_off_record_fails_not_decrypted(self):
+        import struct
+        for cut in (100, 1, 30):
+            wire, server, report = self.run_image(('cut', cut))
+            with self.assertRaisesRegex(g.ProbeError, 'image_not_decrypted'):
+                g.get_image(wire, server, report)
+            self.assertFalse(report['image_decrypted'])
+            self.assertNoMarker(report)
+
+    def test_explicit_run_still_required(self):
+        import contextlib, io
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            g.main(['--image'])
+        self.assertIn('explicit_run_required', out.getvalue())
+
+
+class ImageBoundaryTests(unittest.TestCase):
+    def make(self, **kw):
+        return g.USBWire(core=object(), util=object(), **kw)
+
+    def test_image_not_allowed_without_flag(self):
+        wire = self.make()
+        with self.assertRaisesRegex(g.ProbeError, 'image_not_armed'):
+            wire.send(g.image_frame())
+        with self.assertRaisesRegex(g.ProbeError, 'image_not_allowed'):
+            wire.arm_image()
+
+    def test_image_needs_state_query_then_once(self):
+        wire = self.make(image=True)
+        with self.assertRaisesRegex(g.ProbeError, 'image_not_allowed'):
+            wire.arm_image()
+        wire.state_queries_sent = 1
+        wire.arm_image()
+        wire.image_armed = False
+        with self.assertRaisesRegex(g.ProbeError, 'image_not_armed'):
+            wire.send(g.image_frame())
+        wire.image_sent = True
+        with self.assertRaisesRegex(g.ProbeError, 'image_not_allowed'):
+            wire.arm_image()
+
+    def test_image_excludes_other_modes(self):
+        for kw in (dict(fdt=True), dict(state_queries=2)):
+            with self.assertRaisesRegex(g.ProbeError, 'image_excludes_other_modes'):
+                self.make(image=True, **kw)
+
+    def test_other_image_payloads_refused(self):
+        import struct
+        wire = self.make(image=True)
+        wire.state_queries_sent = 1; wire.arm_image()
+        body = struct.pack('<BH', 0x20, 3) + b'\x00\x00'
+        raw = g.frame(0xa0, body + bytes([(0xaa-sum(body)) & 255]))
+        with self.assertRaisesRegex(g.ProbeError, 'non_allowlisted|command_not_allowed'):
+            wire.send(raw)
+
+    def test_receive_image_only_after_send(self):
+        wire = self.make(image=True)
+        with self.assertRaisesRegex(g.ProbeError, 'image_not_sent'):
+            wire.receive_image(1)
+
+    def test_cli_flag_rules(self):
+        import contextlib, io, json
+        for argv, label in ((['--run', '--image'], 'image_requires_query_state'),
+                            (['--run', '--query-state', '--image', '--fdt-manual'], 'image_excludes_other_modes'),
+                            (['--run', '--query-state', '--query-state-pre-tls', '--image'], 'image_excludes_other_modes')):
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                g.main(argv)
+            self.assertEqual(json.loads(out.getvalue())['error'], label)

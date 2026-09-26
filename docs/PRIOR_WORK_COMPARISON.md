@@ -16,7 +16,7 @@ Sources: [Th0mas blog post](https://blog.th0m.as/misc/fingerprint-reversing/) an
 
 ## Important difference: large-transfer length
 
-The blog reports scan-time large packets of 14,930 bytes. Our USBPcap metadata records 14,866-byte IN transfers, a difference of 64 bytes. This may be a capture-format/framing difference, a driver/firmware variation, or another protocol-layer distinction. It is an open discrepancy, not evidence that the devices differ.
+The blog reports scan-time large packets of 14,930 bytes. Our USBPcap metadata records 14,866-byte IN transfers, a difference of 64 bytes. This may be a capture-format/framing difference, a driver/firmware variation, or another protocol-layer distinction. It is an open discrepancy, not evidence that the devices differ. **Resolved by experiment 0013:** the reader's image frame body is 14,862 bytes; USBPcap's 14,866 adds the 4-byte frame header, so the image size is the same.
 
 ## TLS is not disproven
 
