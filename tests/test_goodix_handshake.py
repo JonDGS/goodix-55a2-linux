@@ -1642,3 +1642,10 @@ class ImageOnTouchBoundaryTests(unittest.TestCase):
             with contextlib.redirect_stdout(out):
                 g.main(argv)
             self.assertEqual(json.loads(out.getvalue())['error'], label)
+
+
+class CLIAbbreviationTests(unittest.TestCase):
+    def test_abbreviated_flags_refused(self):
+        import contextlib, io
+        with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+            g.main(['--run', '--query-state', '--image', '--save'])

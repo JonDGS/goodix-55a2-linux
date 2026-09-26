@@ -1021,7 +1021,7 @@ class USBWire:
 
 def main(argv=None):
     import argparse, json, os, resource, sys
-    parser = argparse.ArgumentParser(description='One handshake-only probe; does not scan or provision the reader.')
+    parser = argparse.ArgumentParser(description='One handshake-only probe; does not scan or provision the reader.', allow_abbrev=False)
     parser.add_argument('--run', action='store_true', help='perform the approved single hardware test from an interactive root terminal')
     parser.add_argument('--query-state', action='store_true', help='experiment 0006: after the handshake, send one fixed A.7 QueryMcuState')
     parser.add_argument('--query-state-pre-tls', action='store_true', help='experiment 0008: also send the same A.7 once before the TLS request (needs --query-state)')
