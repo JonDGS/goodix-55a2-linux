@@ -1,6 +1,7 @@
 # Experiment 0014 plan: one image with a finger, saved on the laptop
 
-Status: **approved (defaults; images beside the tool), implemented, reviewed (PASS), awaiting run.**
+Status: **run; passed.** Reviewed (PASS). See
+[`0014-image-with-finger-result.md`](0014-image-with-finger-result.md).
 
 ## Why
 
@@ -74,7 +75,7 @@ special permissions). Rules:
 ## Decisions for Jon
 
 1. **Summary numbers in the JSON** (min/max/mean/stddev): default yes.
-   Without them, comparing the two images means you describe what you see.
+   Without them, comparing the two images relies on the operator describing them.
 2. **When in the touch cycle:** default image right after the down event, as
    Windows does. The alternative (manual `3.3` with finger, then `2.0`)
    departs from the Windows sequence.
