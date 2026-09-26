@@ -27,8 +27,15 @@ An open, privacy-conscious research effort to support the Goodix USB fingerprint
 - **Manual finger detection works.** One `3.3` manual FDT reading, without a
   config upload, reports touch flag `0000` with no finger and non-zero with a
   finger ([experiment 0010](docs/experiments/0010-fdt-manual-state-result.md)).
-- Not yet done: TLS-protected data from the reader, image capture, enrollment or
-  matching. There is no usable Linux driver.
+- **Finger-down and finger-up events work** with `3.1`/`3.2`, and `6.0`
+  disarms the reader ([experiment 0011](docs/experiments/0011-fdt-down-event-result.md),
+  [experiment 0012](docs/experiments/0012-fdt-up-event-result.md)).
+- **An image request works.** One `2.0` McuGetImage with no finger returned a
+  TLS-protected reply that decrypted to 14,788 bytes (56 × 176 12-bit pixels
+  plus a trailer), without a chip-config upload. Only its shape was recorded
+  ([experiment 0013](docs/experiments/0013-image-request-no-finger-result.md)).
+- Not yet done: decoding or checking image content, capture with a finger,
+  enrollment or matching. There is no usable Linux driver.
 
 ## Windows capture helper
 
@@ -100,6 +107,11 @@ Related but differently identified Goodix sensors may use substantially differen
   - [`docs/experiments/0010-fdt-manual-state.md`](docs/experiments/0010-fdt-manual-state.md) — plan: one manual finger-detection (`3.3`) reading, finger off and on.
   - [`docs/experiments/0010-fdt-manual-state-result.md`](docs/experiments/0010-fdt-manual-state-result.md) — touch flag `0000` off, `01ed` on; `A.7` unchanged.
   - [`docs/experiments/0011-fdt-down-event.md`](docs/experiments/0011-fdt-down-event.md) — plan: one `3.1` FDT down, then wait up to 15 s for one finger-down event.
+  - [`docs/experiments/0011-fdt-down-event-result.md`](docs/experiments/0011-fdt-down-event-result.md) — finger-down event received; `6.0` disarms.
+  - [`docs/experiments/0012-fdt-up-event.md`](docs/experiments/0012-fdt-up-event.md) — plan: one `3.2` FDT up after a down event.
+  - [`docs/experiments/0012-fdt-up-event-result.md`](docs/experiments/0012-fdt-up-event-result.md) — finger-up event received on lift.
+  - [`docs/experiments/0013-image-request-no-finger.md`](docs/experiments/0013-image-request-no-finger.md) — plan: one `2.0` image request, no finger, shape-only report.
+  - [`docs/experiments/0013-image-request-no-finger-result.md`](docs/experiments/0013-image-request-no-finger-result.md) — reply decrypted to 14,788 bytes; image path works.
   - [`docs/WINDOWS_CAPTURE_CLI.md`](docs/WINDOWS_CAPTURE_CLI.md) — experimental Windows capture helper guide.
 - [`tools/pcap_metadata.py`](tools/pcap_metadata.py) — local-only classic-PCAP metadata inspector; it never emits packet payload bytes.
 - [`tools/usbpcap_bulk_index.py`](tools/usbpcap_bulk_index.py) — local-only USBPcap bulk-header indexer; it skips transfer payloads entirely.

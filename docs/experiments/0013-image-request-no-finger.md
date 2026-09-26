@@ -1,6 +1,7 @@
 # Experiment 0013 plan: one image request with no finger on the sensor
 
-Status: **approved (defaults), implemented, awaiting review.**
+Status: **run; passed.** Reviewed (PASS). See
+[`0013-image-request-no-finger-result.md`](0013-image-request-no-finger-result.md).
 
 ## Why
 
@@ -28,7 +29,7 @@ finger on the sensor**, and the report records the reply's form only.
   5 + 14,848 bytes → `tls decrypted (14788 bytes)`. Matches Lambertz.
 - goodix-fp-dump `goodix.py` `mcu_get_image()` (line 202–215): same send,
   ACK, then one reply with the TLS-data flag; driver scripts strip `[9:]`.
-- Our Windows captures (0003) show a 14,866-byte IN transfer for each image:
+- The project's Windows captures (0003) show a 14,866-byte IN transfer for each image:
   14,862 + 4-byte frame header. Consistent with the log; the 64-byte gap to
   Lambertz's 14,930 in `PRIOR_WORK_COMPARISON.md` is now explained as his
   pcap framing, not a different image size (to be confirmed by this run).
