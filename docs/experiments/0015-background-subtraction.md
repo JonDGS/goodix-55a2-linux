@@ -1,6 +1,7 @@
 # Experiment 0015 plan: background subtraction on fresh image pairs
 
-Status: **implemented; reviewed (PASS, nits fixed).** Approved by Jon with all defaults (3 pairs, `nofinger − finger` with 1–99 % stretch, zero-pixel counts only).
+Status: **run; passed.** See
+[`0015-background-subtraction-result.md`](0015-background-subtraction-result.md).
 
 ## Why
 

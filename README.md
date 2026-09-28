@@ -38,7 +38,11 @@ An open, privacy-conscious research effort to support the Goodix USB fingerprint
   right after a finger-down event produced a 176 × 56 image showing ridge
   lines, without a chip-config upload. Images stay on the test laptop and
   are not published ([experiment 0014](docs/experiments/0014-image-with-finger-result.md)).
-- Not yet done: background calibration, image quality, enrollment or
+- **Background subtraction works.** Subtracting a fresh no-finger image
+  removes the fixed grey-block pattern and leaves clear ridges; no-finger
+  images agree within about 4–12 counts across runs and days, and exactly 808
+  pixels read 0 in every image ([experiment 0015](docs/experiments/0015-background-subtraction-result.md)).
+- Not yet done: image quality, enrollment or
   matching. There is no usable Linux driver.
 
 ## Windows capture helper
@@ -118,6 +122,8 @@ Related but differently identified Goodix sensors may use substantially differen
   - [`docs/experiments/0013-image-request-no-finger-result.md`](docs/experiments/0013-image-request-no-finger-result.md) — reply decrypted to 14,788 bytes; image path works.
   - [`docs/experiments/0014-image-with-finger.md`](docs/experiments/0014-image-with-finger.md) — plan: image after a finger-down event, saved locally.
   - [`docs/experiments/0014-image-with-finger-result.md`](docs/experiments/0014-image-with-finger-result.md) — ridge pattern visible; no chip config needed.
+  - [`docs/experiments/0015-background-subtraction.md`](docs/experiments/0015-background-subtraction.md) — plan: offline no-finger subtraction on fresh pairs.
+  - [`docs/experiments/0015-background-subtraction-result.md`](docs/experiments/0015-background-subtraction-result.md) — blocks removed, ridges clear; baseline stable.
   - [`docs/WINDOWS_CAPTURE_CLI.md`](docs/WINDOWS_CAPTURE_CLI.md) — experimental Windows capture helper guide.
 - [`tools/pcap_metadata.py`](tools/pcap_metadata.py) — local-only classic-PCAP metadata inspector; it never emits packet payload bytes.
 - [`tools/usbpcap_bulk_index.py`](tools/usbpcap_bulk_index.py) — local-only USBPcap bulk-header indexer; it skips transfer payloads entirely.
