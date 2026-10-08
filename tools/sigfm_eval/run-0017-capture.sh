@@ -41,27 +41,32 @@ run_tool() {   # $1 = label for labels.txt, rest = tool args
     echo "$base $label" >> "$DST/labels.txt"
 }
 
+countdown() { for s in $(seq "$1" -1 1); do printf '\r    %s ' "$s"; sleep 1; done; printf '\r      \r'; }
+
 nofinger() {
-    echo; echo ">>> No-finger image: keep the sensor clear."
-    read -r -p "    Press Enter when nothing touches the sensor... "
+    echo; echo ">>> No-finger image in 3 s: keep the sensor clear."
+    countdown 3
     run_tool nofinger --run --query-state --image --save-image
     echo "    ok"
 }
 
 press() {   # $1 = A or B, $2 = n, $3 = total
-    echo; echo ">>> Finger $1, press $2 of $3. Vary placement slightly, as in normal use."
-    read -r -p "    Press Enter, then touch when it says 'armed'... "
+    # No Enter needed: the tool arms and waits up to 15 s for the touch.
+    echo; echo ">>> Finger $1, press $2 of $3: touch when it says 'armed' (vary placement slightly)."
     run_tool "$1" --run --query-state --fdt-manual --fdt-down --image-on-touch --save-image
     echo "    ok - lift your finger"
-    sleep 1
+    sleep 2
 }
 
 echo "Experiment 0017: 20 x finger A (your enrolled finger), 10 x finger B (another finger)."
-echo "About 40 runs. Ctrl-C stops safely between runs."
+echo "About 40 runs. Only two Enter presses: one to start, one when switching to finger B."
+echo "Ctrl-C stops safely between runs."
+read -r -p "Press Enter to start with finger A... "
 for i in $(seq 1 20); do
     [ $(( (i - 1) % 5 )) = 0 ] && nofinger
     press A "$i" 20
 done
+echo; read -r -p ">>> Switch to finger B, then press Enter... "
 for i in $(seq 1 10); do
     [ $(( (i - 1) % 5 )) = 0 ] && nofinger
     press B "$i" 10
